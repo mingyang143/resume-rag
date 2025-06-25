@@ -4,6 +4,7 @@ import tempfile
 import sys
 import glob
 import psycopg2
+from psycopg2.extras import RealDictCursor
 import subprocess
 from typing import Dict, Optional, List, Callable
 from dateutil import parser
@@ -430,226 +431,388 @@ def extract_summary_paragraph(skills_summary_txt: str) -> str:
         print(f"Error parsing summary JSON: {e}")
         return ""
     
-PREDEFINED_CATEGORIES = [
-    "Game Development",
-    "Web Development", 
-    "NLP",
-    "LLM",
-    "Computer Vision",
-    "3D modeling",
-    "Product Manager",
-    "Mobile development",
-    "Data Science",
-    "Machine Learning"
-]
+# PREDEFINED_CATEGORIES = [
+#     "Game Development",
+#     "Web Development", 
+#     "NLP",
+#     "LLM",
+#     "Computer Vision",
+#     "3D modeling",
+#     "Product Manager",
+#     "Mobile development",
+#     "Data Science",
+#     "Machine Learning"
+# ]
 
-# Define keywords for each category
-CATEGORY_KEYWORDS = {
-    "Game Development": [
-        "game", "unity", "unreal", "graphics programming", "game design", "game engine",
-        "opengl", "directx", "shader", "rendering", "physics engine"
-    ],
-    "Web Development": [
-        "react", "vue", "angular", "django", "flask", "node.js", "nodejs", "express",
-        "html", "css", "javascript", "typescript", "php", "laravel", "spring boot",
-        "frontend", "backend", "full-stack", "web development", "rest api", "graphql", "java"
-    ],
-    "NLP": [
-        "nlp", "natural language processing", "spacy", "nltk", "text analysis", 
-        "text mining", "sentiment analysis", "named entity recognition", "tokenization"
-    ],
-    "LLM": [
-        "llm", "llms", "large language model", "gpt", "bert", "transformer", "transformers",
-        "chatgpt", "langchain", "rag", "fine-tuning", "prompt engineering", "openai"
-    ],
-    "Computer Vision": [
-        "computer vision", "opencv", "yolo", "image processing", "object detection",
-        "image classification", "cnn", "convolutional neural network", "diffusion model",
-        "image recognition", "facial recognition"
-    ],
-    "3D modeling": [
-        "3d modeling", "3d graphics", "blender", "maya", "3ds max", "cad", "autocad",
-        "three.js", "threejs", "webgl", "modeling", "animation", "rendering"
-    ],
-    "Product Manager": [
-        "product manager", "product management", "business analysis", "strategy",
-        "requirements gathering", "roadmap", "stakeholder", "agile", "scrum master"
-    ],
-    "Mobile development": [
-        "ios", "android", "react native", "flutter", "swift", "kotlin", "java",
-        "mobile app", "mobile development", "app store", "play store", "xamarin"
-    ],
-    "Data Science": [
-        "data science", "data analysis", "pandas", "numpy", "matplotlib", "seaborn",
-        "data visualization", "statistics", "analytics", "business analytics",
-        "predictive analytics", "a/b testing", "ab testing", "a-b testing", "tableau", "power bi"
-    ],
-    "Machine Learning": [
-        "machine learning", "ml", "scikit-learn", "sklearn", "tensorflow", "pytorch",
-        "keras", "neural network", "deep learning", "supervised learning",
-        "unsupervised learning", "classification", "regression", "clustering",
-        # Add common algorithm names
-        "kmeans", "k-means", "svm", "support vector machine", "random forest",
-        "decision tree", "linear regression", "logistic regression", "naive bayes",
-        "gradient boosting", "xgboost", "lightgbm", "ensemble methods"
-    ]
-}
+# # Define keywords for each category
+# CATEGORY_KEYWORDS = {
+#     "Game Development": [
+#         "game", "unity", "unreal", "graphics programming", "game design", "game engine",
+#         "opengl", "directx", "shader", "rendering", "physics engine"
+#     ],
+#     "Web Development": [
+#         "react", "vue", "angular", "django", "flask", "node.js", "nodejs", "express",
+#         "html", "css", "javascript", "typescript", "php", "laravel", "spring boot",
+#         "frontend", "backend", "full-stack", "web development", "rest api", "graphql", "java"
+#     ],
+#     "NLP": [
+#         "nlp", "natural language processing", "spacy", "nltk", "text analysis", 
+#         "text mining", "sentiment analysis", "named entity recognition", "tokenization"
+#     ],
+#     "LLM": [
+#         "llm", "llms", "large language model", "gpt", "bert", "transformer", "transformers",
+#         "chatgpt", "langchain", "rag", "fine-tuning", "prompt engineering", "openai"
+#     ],
+#     "Computer Vision": [
+#         "computer vision", "opencv", "yolo", "image processing", "object detection",
+#         "image classification", "cnn", "convolutional neural network", "diffusion model",
+#         "image recognition", "facial recognition"
+#     ],
+#     "3D modeling": [
+#         "3d modeling", "3d graphics", "blender", "maya", "3ds max", "cad", "autocad",
+#         "three.js", "threejs", "webgl", "modeling", "animation", "rendering"
+#     ],
+#     "Product Manager": [
+#         "product manager", "product management", "business analysis", "strategy",
+#         "requirements gathering", "roadmap", "stakeholder", "agile", "scrum master"
+#     ],
+#     "Mobile development": [
+#         "ios", "android", "react native", "flutter", "swift", "kotlin", "java",
+#         "mobile app", "mobile development", "app store", "play store", "xamarin"
+#     ],
+#     "Data Science": [
+#         "data science", "data analysis", "pandas", "numpy", "matplotlib", "seaborn",
+#         "data visualization", "statistics", "analytics", "business analytics",
+#         "predictive analytics", "a/b testing", "ab testing", "a-b testing", "tableau", "power bi"
+#     ],
+#     "Machine Learning": [
+#         "machine learning", "ml", "scikit-learn", "sklearn", "tensorflow", "pytorch",
+#         "keras", "neural network", "deep learning", "supervised learning",
+#         "unsupervised learning", "classification", "regression", "clustering",
+#         # Add common algorithm names
+#         "kmeans", "k-means", "svm", "support vector machine", "random forest",
+#         "decision tree", "linear regression", "logistic regression", "naive bayes",
+#         "gradient boosting", "xgboost", "lightgbm", "ensemble methods"
+#     ]
+# }
 
-def categorize_from_full_paragraph_regex(full_txt: str) -> List[str]:
-    """
-    Extract summary paragraph and categorize using regex keyword matching with context validation.
-    """
-    if not full_txt:
-        return []
+# def categorize_from_full_paragraph_regex(full_txt: str) -> List[str]:
+#     """
+#     Extract summary paragraph and categorize using regex keyword matching with context validation.
+#     """
+#     if not full_txt:
+#         return []
     
     
-    # Convert to lowercase for case-insensitive matching
-    full_lower = full_txt.lower()
+#     # Convert to lowercase for case-insensitive matching
+#     full_lower = full_txt.lower()
     
-    # Find matching categories with context validation
-    matched_categories = []
+#     # Find matching categories with context validation
+#     matched_categories = []
     
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        category_matched = False
-        category_details = []
+#     for category, keywords in CATEGORY_KEYWORDS.items():
+#         category_matched = False
+#         category_details = []
         
-        for keyword in keywords:
-            pattern = re.escape(keyword.lower())
-            matches = list(re.finditer(pattern, full_lower))
+#         for keyword in keywords:
+#             pattern = re.escape(keyword.lower())
+#             matches = list(re.finditer(pattern, full_lower))
             
-            if matches:
-                print(f"🔍 Found {len(matches)} occurrence(s) of '{keyword}' for {category}")
+#             if matches:
+#                 print(f"🔍 Found {len(matches)} occurrence(s) of '{keyword}' for {category}")
                 
-                if keyword.lower() in ["game", "modeling", "ml"]:  # Ambiguous keywords
-                    valid_count = 0
+#                 if keyword.lower() in ["game", "modeling", "ml"]:  # Ambiguous keywords
+#                     valid_count = 0
                     
-                    # Check each occurrence
-                    for i, match in enumerate(matches, 1):
-                        print(f"   📍 Validating occurrence {i}/{len(matches)}")
-                        if validate_keyword_context(full_lower, match, keyword, category):
-                            valid_count += 1
+#                     # Check each occurrence
+#                     for i, match in enumerate(matches, 1):
+#                         print(f"   📍 Validating occurrence {i}/{len(matches)}")
+#                         if validate_keyword_context(full_lower, match, keyword, category):
+#                             valid_count += 1
                     
-                    if valid_count > 0:
-                        category_details.append(f"{keyword}({valid_count}/{len(matches)} valid)")
-                        category_matched = True
-                        print(f"   ✅ {keyword}: {valid_count}/{len(matches)} occurrences are valid")
-                    else:
-                        print(f"   ❌ {keyword}: 0/{len(matches)} occurrences are valid")
+#                     if valid_count > 0:
+#                         category_details.append(f"{keyword}({valid_count}/{len(matches)} valid)")
+#                         category_matched = True
+#                         print(f"   ✅ {keyword}: {valid_count}/{len(matches)} occurrences are valid")
+#                     else:
+#                         print(f"   ❌ {keyword}: 0/{len(matches)} occurrences are valid")
                         
-                else:  # Non-ambiguous keywords
-                    category_details.append(f"{keyword}({len(matches)})")
-                    category_matched = True
-                    print(f"   ✅ {keyword}: accepted all {len(matches)} occurrence(s)")
+#                 else:  # Non-ambiguous keywords
+#                     category_details.append(f"{keyword}({len(matches)})")
+#                     category_matched = True
+#                     print(f"   ✅ {keyword}: accepted all {len(matches)} occurrence(s)")
         
-        if category_matched:
-            matched_categories.append(category)
-            print(f"✅ {category}: {category_details}")
+#         if category_matched:
+#             matched_categories.append(category)
+#             print(f"✅ {category}: {category_details}")
     
-    if not matched_categories:
-        print("❌ No categories matched")
+#     if not matched_categories:
+#         print("❌ No categories matched")
     
-    print(f"🏷️  FINAL CATEGORIES: {matched_categories}")
-    return matched_categories
+#     print(f"🏷️  FINAL CATEGORIES: {matched_categories}")
+#     return matched_categories
 
-def validate_keyword_context(text: str, match, keyword: str, category: str) -> bool:
-    """
-    Use Qwen to validate if a keyword in context actually belongs to the category.
-    """
-    start = match.start()
-    end = match.end()
+# def validate_keyword_context(text: str, match, keyword: str, category: str) -> bool:
+#     """
+#     Use Qwen to validate if a keyword in context actually belongs to the category.
+#     """
+#     start = match.start()
+#     end = match.end()
     
-    # PRE-FILTERING: Check for obvious false positives before calling LLM
-    if keyword.lower() == "ml" and category == "Machine Learning":
-        # Check if ML is part of a larger word
-        full_word_start = start
-        full_word_end = end
+#     # PRE-FILTERING: Check for obvious false positives before calling LLM
+#     if keyword.lower() == "ml" and category == "Machine Learning":
+#         # Check if ML is part of a larger word
+#         full_word_start = start
+#         full_word_end = end
         
-        # Extend backwards to find start of word
-        while full_word_start > 0 and text[full_word_start - 1].isalpha():
-            full_word_start -= 1
+#         # Extend backwards to find start of word
+#         while full_word_start > 0 and text[full_word_start - 1].isalpha():
+#             full_word_start -= 1
         
-        # Extend forwards to find end of word
-        while full_word_end < len(text) and text[full_word_end].isalpha():
-            full_word_end += 1
+#         # Extend forwards to find end of word
+#         while full_word_end < len(text) and text[full_word_end].isalpha():
+#             full_word_end += 1
         
-        full_word = text[full_word_start:full_word_end].lower()
+#         full_word = text[full_word_start:full_word_end].lower()
         
-        # Known false positives for ML
-        markup_languages = ["html", "xml", "yaml", "sgml", "toml", "haml", "xaml"]
-        if full_word in markup_languages:
-            print(f"   🛡️ Pre-filter: '{keyword}' in '{full_word}' is markup language -> INVALID")
-            return False
+#         # Known false positives for ML
+#         markup_languages = ["html", "xml", "yaml", "sgml", "toml", "haml", "xaml"]
+#         if full_word in markup_languages:
+#             print(f"   🛡️ Pre-filter: '{keyword}' in '{full_word}' is markup language -> INVALID")
+#             return False
     
-    # Extract context around the matched keyword (50 chars before and after)
-    context_start = max(0, start - 50)
-    context_end = min(len(text), end + 50)
-    context = text[context_start:context_end]
+#     # Extract context around the matched keyword (50 chars before and after)
+#     context_start = max(0, start - 50)
+#     context_end = min(len(text), end + 50)
+#     context = text[context_start:context_end]
     
-    # Highlight the matched keyword in the context
-    highlighted_context = (
-        context[:start-context_start] + 
-        f"**{keyword.upper()}**" + 
-        context[end-context_start:]
-    )
+#     # Highlight the matched keyword in the context
+#     highlighted_context = (
+#         context[:start-context_start] + 
+#         f"**{keyword.upper()}**" + 
+#         context[end-context_start:]
+#     )
     
-    validation_prompt = f"""
-        You are an expert at understanding technical contexts. I need to determine if a keyword belongs to a specific technical category.
+#     validation_prompt = f"""
+#         You are an expert at understanding technical contexts. I need to determine if a keyword belongs to a specific technical category.
 
-        KEYWORD: "{keyword}"
-        CATEGORY: "{category}"
-        CONTEXT: "{highlighted_context}"
+#         KEYWORD: "{keyword}"
+#         CATEGORY: "{category}"
+#         CONTEXT: "{highlighted_context}"
 
-        CRITICAL RULES - THESE MUST BE FOLLOWED EXACTLY:
-        1. If you see "game theory" - this is mathematics, NOT Game Development
-        2. If you see "modeling" in non-3D contexts (data modeling, financial modeling) - NOT 3D modeling
-        3. Look at the EXACT surrounding words to determine the true meaning
+#         CRITICAL RULES - THESE MUST BE FOLLOWED EXACTLY:
+#         1. If you see "game theory" - this is mathematics, NOT Game Development
+#         2. If you see "modeling" in non-3D contexts (data modeling, financial modeling) - NOT 3D modeling
+#         3. Look at the EXACT surrounding words to determine the true meaning
 
-        EXAMPLES:
-        ❌ "**game** theory" → NOT Game Development (it's mathematics)
-        ❌ "data **modeling**" → NOT 3D modeling (it's data science)
-        ❌ "financial **modeling**" → NOT 3D modeling (it's finance)
-        ✅ "**game** engine" → IS Game Development
-        ✅ "3D **modeling** in Blender" → IS 3D modeling
-        ✅ "**modeling** characters for animation" → IS 3D modeling
+#         EXAMPLES:
+#         ❌ "**game** theory" → NOT Game Development (it's mathematics)
+#         ❌ "data **modeling**" → NOT 3D modeling (it's data science)
+#         ❌ "financial **modeling**" → NOT 3D modeling (it's finance)
+#         ✅ "**game** engine" → IS Game Development
+#         ✅ "3D **modeling** in Blender" → IS 3D modeling
+#         ✅ "**modeling** characters for animation" → IS 3D modeling
 
-        QUESTION: Does **{keyword.upper()}** in this context refer to {category}?
+#         QUESTION: Does **{keyword.upper()}** in this context refer to {category}?
 
-        Answer ONLY: YES or NO
-        """
+#         Answer ONLY: YES or NO
+#         """
 
-    try:
-        reply = qwen.chat_completion(
-            question=validation_prompt,
-            system_prompt="You are an expert at technical categorization. Follow the rules exactly. Answer only YES or NO."
-        ).strip().upper()
+#     try:
+#         reply = qwen.chat_completion(
+#             question=validation_prompt,
+#             system_prompt="You are an expert at technical categorization. Follow the rules exactly. Answer only YES or NO."
+#         ).strip().upper()
         
-        is_valid = reply.startswith("YES")
-        print(f"   Context validation for '{keyword}' in '{category}': {reply} -> {'VALID' if is_valid else 'INVALID'}")
+#         is_valid = reply.startswith("YES")
+#         print(f"   Context validation for '{keyword}' in '{category}': {reply} -> {'VALID' if is_valid else 'INVALID'}")
         
-        return is_valid
+#         return is_valid
         
-    except Exception as e:
-        print(f"   Context validation failed for '{keyword}': {e}")
+#     except Exception as e:
+#         print(f"   Context validation failed for '{keyword}': {e}")
         
-        # Enhanced fallback logic
-        if keyword.lower() == "ml":
-            context_lower = context.lower()
-            if any(word in context_lower for word in ["html", "xml", "yaml", "sgml"]):
-                print(f"   🛡️ Fallback: Detected ML in markup language context, returning False")
-                return False
+#         # Enhanced fallback logic
+#         if keyword.lower() == "ml":
+#             context_lower = context.lower()
+#             if any(word in context_lower for word in ["html", "xml", "yaml", "sgml"]):
+#                 print(f"   🛡️ Fallback: Detected ML in markup language context, returning False")
+#                 return False
         
-        if keyword.lower() == "game" and "theory" in context.lower():
-            print(f"   🛡️ Fallback: Detected 'game theory', returning False")
-            return False
+#         if keyword.lower() == "game" and "theory" in context.lower():
+#             print(f"   🛡️ Fallback: Detected 'game theory', returning False")
+#             return False
             
-        if keyword.lower() == "modeling":
-            context_lower = context.lower()
-            non_3d_contexts = ["data modeling", "financial modeling", "business modeling", "mathematical modeling"]
-            if any(phrase in context_lower for phrase in non_3d_contexts):
-                print(f"   🛡️ Fallback: Detected non-3D modeling context, returning False")
-                return False
+#         if keyword.lower() == "modeling":
+#             context_lower = context.lower()
+#             non_3d_contexts = ["data modeling", "financial modeling", "business modeling", "mathematical modeling"]
+#             if any(phrase in context_lower for phrase in non_3d_contexts):
+#                 print(f"   🛡️ Fallback: Detected non-3D modeling context, returning False")
+#                 return False
             
-        return True
+#         return True
+
+def safe_parse_json(reply: str) -> dict:
+    """
+    Extract the first {...} block from reply and parse it as JSON.
+    Raises ValueError if no JSON object is found or it fails to parse.
+    """
+    # Remove Markdown fences if present
+    reply = re.sub(r"^```+json\s*|\s*```+$", "", reply.strip(), flags=re.IGNORECASE)
+    # Find the first {...} block
+    m = re.search(r'(\{.*\})', reply, re.DOTALL)
+    if not m:
+        raise ValueError("No JSON object found in LLM reply")
+    payload = m.group(1)
+    return json.loads(payload)
+
+def load_categories(conn) -> list[dict]:
+    """
+    Fetch all skill categories from the DB.
+    Returns a list of dicts: [{'id': 1, 'name': 'Web Development'}, ...]
+    """
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT id, name FROM skill_category;")
+        return cur.fetchall()
+    
+
+# def classify_skills_by_category(
+#     qwen_client,
+#     resume_text: str,
+#     categories: list[dict],
+#     top_k: int = 5
+# ) -> list[dict]:
+#     """
+#     For each category, ask Qwen to find all distinct mentions of tools/tech/languages
+#     that belong in that domain (even if the category name itself isn’t present).
+#     Return list of {"id","name","mentions","score"} sorted by score desc.
+#     """
+#     results = []
+#     for cat in categories:
+#         prompt = f"""
+# You are an expert technical recruiter.  Your job is to identify and count *all* 
+# skills, tools, frameworks and languages that belong to the “{cat['name']}” domain 
+# —even if the exact phrase “{cat['name']}” never appears.  For example, for Web Development 
+# you might count JavaScript, HTML, CSS, React, Node.js, Django, etc.
+
+# Return *only* valid JSON in this exact format:
+
+# {{
+#   "mentions": ["skill1", "skill2", …],
+#   "score": <number of distinct mentions>
+# }}
+
+# Now analyze this resume text:
+# \"\"\"
+# {resume_text}
+# \"\"\"
+# """
+#         reply = qwen_client.chat_completion(
+#             question=prompt.strip(),
+#             system_prompt="You are an expert technical recruiter. Return only valid JSON."
+#         ).strip()
+
+#         # data = json.loads(reply)
+#         # # attach our own category metadata
+#         # data["id"]   = cat["id"]
+#         # data["name"] = cat["name"]
+#         # results.append(data)
+
+#     # pick top_k categories by score
+#     # return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
+#         # parse JSON safely
+#         try:
+#             payload = json.loads(reply)
+#             mentions = payload.get("mentions", [])
+#             score    = int(payload.get("score", 0))
+#         except (json.JSONDecodeError, ValueError):
+#             print(f"⚠️ Failed to parse JSON for category {cat['name']!r}, reply was: {reply!r}")
+#             mentions = []
+#             score    = 0
+
+#         results.append({
+#             "id":       cat["id"],
+#             "name":     cat["name"],
+#             "mentions": mentions,
+#             "score":    score,
+#         })
+#      # always return a list (even if all zero)
+#     return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
+
+
+def classify_skills_by_category(
+    qwen_client,
+    resume_text: str,
+    categories: list[dict],
+    top_k: int = 5
+) -> list[dict]:
+    """
+    For each category, ask Qwen to identify all skills belonging to that domain.
+    Use safe_parse_json() to robustly extract the JSON payload.
+    Returns top_k categories sorted by score desc.
+    """
+    results = []
+    for cat in categories:
+        prompt = f"""
+You are an expert technical recruiter.  Return ONLY valid JSON—no markdown fences or extra text.
+
+Respond in this exact format:
+{{
+  "mentions": ["skill1", "skill2", …],
+  "score": <number of distinct mentions>
+}}
+
+Now analyze this resume text for the domain “{cat['name']}”:
+\"\"\"
+{resume_text}
+\"\"\"
+"""
+        reply = qwen_client.chat_completion(
+            question=prompt.strip(),
+            system_prompt="You are an expert recruiter. Return only raw JSON."
+        ).strip()
+
+        try:
+            payload = safe_parse_json(reply)
+            mentions = payload.get("mentions", [])
+            score    = int(payload.get("score", 0))
+        except Exception as e:
+            print(f"⚠️ Failed to parse JSON for category '{cat['name']}', error: {e}\nRaw reply was: {reply!r}")
+            mentions = []
+            score    = 0
+
+        results.append({
+            "id":       cat["id"],
+            "name":     cat["name"],
+            "mentions": mentions,
+            "score":    score,
+        })
+
+    # return only the top_k by score
+    return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
+
+
+
+
+def upsert_category_scores(cur, candidate_key: str, filename: str, classified: list[dict]):
+    """
+    Upsert each (candidate_key,filename,category_id) → score + mentions.
+    """
+    for entry in classified:
+        cur.execute("""
+            INSERT INTO resume_category_score
+              (candidate_key, filename, category_id, score, mentions)
+            VALUES (%s,%s,%s,%s,%s)
+            ON CONFLICT (candidate_key,filename,category_id) DO UPDATE
+              SET score    = EXCLUDED.score,
+                  mentions = EXCLUDED.mentions;
+        """, (
+            candidate_key,
+            filename,
+            entry["id"],
+            entry["score"],
+            json.dumps(entry["mentions"])
+        ))
 
     
 def ingest_resume_normal(resumes_folder: str, candidate_key: str):
@@ -686,22 +849,54 @@ def ingest_resume_normal(resumes_folder: str, candidate_key: str):
 
 
 
-        print("----------------------------------------------------")
-        print("Categorizing skills into technical domains...")
-        print("----------------------------------------------------")
-        categories = categorize_from_full_paragraph_regex(full_text)
-        print("----------------------------------------------------")
-        print("→ Categories:", categories)
-        print("----------------------------------------------------")
+        # print("----------------------------------------------------")
+        # print("Categorizing skills into technical domains...")
+        # print("----------------------------------------------------")
+        # categories = categorize_from_full_paragraph_regex(full_text)
+        # print("----------------------------------------------------")
+        # print("→ Categories:", categories)
+        # print("----------------------------------------------------")
+
+        # upsert_resumes_normal(
+        #     cur,
+        #     filename        = fname,
+        #     candidate_key   = candidate_key,
+        #     skills_categories=categories,
+        #     full_resume_txt = full_text,
+        #     skills_summary_txt = skills_summary_txt
+        # )
+        # ─── Dynamic Qwen-based categorization ────────────────────────────
+        print("Loading skill categories from database…")
+        db_categories = load_categories(conn)
+
+        print("Classifying skills via Qwen for each category…")
+        # classified = classify_skills_by_category(qwen, full_text, db_categories, top_k=5)
+        # ask for as many as there are categories → you’ll get all of them
+        classified   = classify_skills_by_category(
+            qwen,
+            full_text,
+            db_categories,
+            top_k=len(db_categories),
+        )
+        
+
+        # 1) Persist detailed scores & mentions
+        upsert_category_scores(cur, candidate_key, fname, classified)
+
+        # 2) Extract all category NAMES for your summary table
+        top_names = [c["name"] for c in classified]
+        print("→ Categories in Descending order by score:", top_names)
 
         upsert_resumes_normal(
             cur,
-            filename        = fname,
-            candidate_key   = candidate_key,
-            skills_categories=categories,
-            full_resume_txt = full_text,
-            skills_summary_txt = skills_summary_txt
+            filename             = fname,
+            candidate_key        = candidate_key,
+            skills_categories    = top_names,
+            full_resume_txt      = full_text,
+            skills_summary_txt   = skills_summary_txt
         )
+        # ─────────────────────────────────────────────────────────────────
+
         conn.commit()
         print("----------------------------------------------------")
         print(f"  ✓ Inserted/Updated {fname} in resumes_normal")
