@@ -349,48 +349,99 @@ def get_candidate_details(candidate_key: str) -> Dict:
         st.error(f"Error fetching candidate details: {e}")
         return {}
 
+# def delete_candidate_records(candidate_key: str) -> Dict[str, int]:
+#     """
+#     Delete all records for a specific candidate from both tables.
+    
+#     Args:
+#         candidate_key: The candidate identifier to delete
+        
+#     Returns:
+#         Dictionary with deletion counts from both tables
+#     """
+#     try:
+#         env = load_env_vars()
+#         conn = connect_postgres(env)
+#         cur = conn.cursor()
+        
+#         # Delete from resumes_metadata
+#         cur.execute("""
+#             DELETE FROM public.resumes_metadata 
+#             WHERE candidate_key = %s;
+#         """, (candidate_key,))
+#         metadata_deleted = cur.rowcount
+        
+#         # Delete from resumes_normal
+#         cur.execute("""
+#             DELETE FROM public.resumes_normal 
+#             WHERE candidate_key = %s;
+#         """, (candidate_key,))
+#         normal_deleted = cur.rowcount
+        
+#         conn.commit()
+#         cur.close()
+#         conn.close()
+        
+#         return {
+#             'metadata_deleted': metadata_deleted,
+#             'normal_deleted': normal_deleted,
+#             'total_deleted': metadata_deleted + normal_deleted
+#         }
+        
+#     except Exception as e:
+#         st.error(f"Error deleting candidate records: {e}")
+#         return {'metadata_deleted': 0, 'normal_deleted': 0, 'total_deleted': 0}
+
 def delete_candidate_records(candidate_key: str) -> Dict[str, int]:
     """
-    Delete all records for a specific candidate from both tables.
-    
-    Args:
-        candidate_key: The candidate identifier to delete
-        
-    Returns:
-        Dictionary with deletion counts from both tables
+    Delete all records for a specific candidate from metadata, normal, and score tables.
     """
     try:
         env = load_env_vars()
         conn = connect_postgres(env)
         cur = conn.cursor()
-        
-        # Delete from resumes_metadata
+
+        # 1) Delete from resumes_metadata
         cur.execute("""
-            DELETE FROM public.resumes_metadata 
+            DELETE FROM public.resumes_metadata
             WHERE candidate_key = %s;
         """, (candidate_key,))
         metadata_deleted = cur.rowcount
-        
-        # Delete from resumes_normal
+
+        # 2) Delete from resumes_normal
         cur.execute("""
-            DELETE FROM public.resumes_normal 
+            DELETE FROM public.resumes_normal
             WHERE candidate_key = %s;
         """, (candidate_key,))
         normal_deleted = cur.rowcount
-        
+
+        # 3) Delete from resume_category_score
+        cur.execute("""
+            DELETE FROM public.resume_category_score
+            WHERE candidate_key = %s;
+        """, (candidate_key,))
+        score_deleted = cur.rowcount
+
         conn.commit()
         cur.close()
         conn.close()
-        
+
         return {
             'metadata_deleted': metadata_deleted,
             'normal_deleted': normal_deleted,
-            'total_deleted': metadata_deleted + normal_deleted
+            'score_deleted':    score_deleted,
+            'total_deleted':    metadata_deleted + normal_deleted + score_deleted,
         }
-        
+
     except Exception as e:
         st.error(f"Error deleting candidate records: {e}")
-        return {'metadata_deleted': 0, 'normal_deleted': 0, 'total_deleted': 0}
+        return {
+            'metadata_deleted': 0,
+            'normal_deleted':   0,
+            'score_deleted':    0,
+            'total_deleted':    0,
+        }
+
 
 def render_deletion_tab() -> None:
     """
@@ -491,6 +542,7 @@ def render_deletion_tab() -> None:
                                 f"✅ **Successfully deleted {selected_candidate}!**\n\n"
                                 f"📊 Metadata records deleted: {deletion_result['metadata_deleted']}\n\n"
                                 f"🔍 Skills records deleted: {deletion_result['normal_deleted']}\n\n"
+                                f"🏷️ Category‐score rows deleted: {deletion_result['score_deleted']}\n\n"
                                 f"📁 Total records deleted: {deletion_result['total_deleted']}"
                             )
                             
