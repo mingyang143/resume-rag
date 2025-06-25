@@ -3,6 +3,7 @@ import sys
 import time
 import streamlit as st
 import psycopg2
+import pandas as pd
 from dotenv import load_dotenv
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -36,6 +37,8 @@ import json
 
 load_dotenv()  # In case helpers need environment variables
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 # STREAMLIT APP
 # ──────────────────────────────────────────────────────────────────────────────
@@ -91,6 +94,7 @@ with st.sidebar:
         [   "📊 Overview", 
             "📥 Ingestion",
             "✏️ Manual Add",
+            "📋 Skill Categories",
             "🗑️ Deletion",
             "🔍 Filter Records",
             
@@ -106,9 +110,97 @@ with st.sidebar:
         )
         st.caption("Enter the absolute path to the folder containing PDF/DOCX resumes.")
         run_button = st.button("🔄 Run Ingestion")
-
+        
     elif mode == "✏️ Manual Add":
         pass
+
+    
+    elif mode == "📋 Skill Categories":
+        st.markdown("### 🛠️ Manage Skill Categories")
+        conn = connect_postgres(load_env_vars())
+        cur  = conn.cursor()
+
+        # 1) Show existing categories
+        st.write("#### Existing Categories")
+        cur.execute("SELECT id, name FROM skill_category ORDER BY name;")
+        rows = cur.fetchall()
+        if rows:
+            st.table({
+                "ID":   [r[0] for r in rows],
+                "Name": [r[1].title() for r in rows],
+            })
+        else:
+            st.info("No skill categories defined yet.")
+
+        st.markdown("---")
+
+        # 2) Show previous alert once
+        if st.session_state.get("cat_success"):
+            st.success(st.session_state["cat_success"])
+            del st.session_state["cat_success"]
+
+        # 3) Clear the text_input on the one run after adding
+        if st.session_state.get("cat_added", False):
+            default_new_cat = ""
+            del st.session_state["cat_added"]
+        else:
+            default_new_cat = st.session_state.get("new_cat_input", "")
+
+        # 4) Add a new category with existence check
+        new_cat = st.text_input(
+            "Add a new category",
+            placeholder="e.g. Web Development",
+            key="new_cat_input",
+            value=default_new_cat,
+        )
+        if st.button("➕ Add Category", key="add_cat_btn"):
+            cat = new_cat.strip()
+            if not cat:
+                st.error("Name cannot be empty.")
+            else:
+                # Try to insert, returning the name if inserted
+                cur.execute("""
+                    INSERT INTO skill_category(name)
+                    VALUES (LOWER(%s))
+                    ON CONFLICT(name) DO NOTHING
+                    RETURNING name;
+                """, (cat,))
+                result = cur.fetchone()
+                if result:
+                    # insertion happened
+                    conn.commit()
+                    st.session_state["cat_success"] = f"Added category: **{cat}**"
+                    st.session_state["cat_added"]   = True
+                else:
+                    # already existed
+                    st.session_state["cat_success"] = f"Category **{cat}** already exists."
+                st.rerun()
+
+        st.markdown("---")
+
+        # 5) Show previous delete alert once
+        if st.session_state.get("del_success"):
+            st.warning(st.session_state["del_success"])
+            del st.session_state["del_success"]
+
+        # 6) Delete an existing category
+        to_delete = st.selectbox(
+            "Delete a category",
+            [r[1].title() for r in rows],
+            index=0 if rows else None
+        )
+        if st.button("🗑️ Delete Category", key="del_cat_btn"):
+            cur.execute(
+                "DELETE FROM skill_category WHERE LOWER(name) = LOWER(%s);",
+                (to_delete,)
+            )
+            conn.commit()
+            st.session_state["del_success"] = f"Deleted category: **{to_delete}**"
+            st.rerun()
+
+        cur.close()
+        conn.close()
+        
     elif mode == "🔍 Filter Records":
         st.markdown("### 🔍 Filter Records")
         st.caption("Choose filters and click “Apply Filters” to retrieve matching filenames.")
@@ -134,7 +226,119 @@ results_placeholder = st.empty()
 # ──────────────────────────────────────────────────────────────────────────────
 if mode == "📊 Overview":
     render_overview_dashboard()
+    st.markdown("### 📈 Candidate Skill Category Scores")
 
+    # —– Fetch data from Postgres —–
+    env  = load_env_vars()
+    conn = connect_postgres(env)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT 
+          s.candidate_key || ' / ' || s.filename AS resume_id,
+          c.name AS category,
+          s.score
+        FROM resume_category_score s
+        JOIN skill_category c ON c.id = s.category_id
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        st.info("No category scores yet.")
+    else:
+        # 1) Build the pivot table
+        df    = pd.DataFrame(rows, columns=["resume_id", "category", "score"])
+        pivot = (
+            df.pivot(index="resume_id", columns="category", values="score")
+              .fillna(0)
+              .astype(int)
+        )
+
+        # 2) Compute an “average score” helper column and sort by it
+        pivot["avg_score"] = pivot.mean(axis=1)
+        pivot = pivot.sort_values("avg_score", ascending=False).drop("avg_score", axis=1)
+
+        # 3) Page through top N by average score
+        total = len(pivot)
+        show_n = st.slider(
+            "Show top N resumes by average score",
+            min_value=1,
+            max_value=min(50, total),
+            value=min(10, total)
+        )
+
+        # 4) Display and allow CSV download
+        display_df = pivot.head(show_n)
+        st.dataframe(display_df)
+        csv = display_df.to_csv().encode("utf-8")
+        st.download_button("⬇️ Download CSV", csv, "category_scores.csv", "text/csv")
+
+
+# if mode == "📊 Overview":
+#     render_overview_dashboard()
+#     st.markdown("### 📈 Candidate Skill Category Scores")
+
+#     # —– Fetch data from Postgres —–
+#     env  = load_env_vars()
+#     conn = connect_postgres(env)
+#     cur  = conn.cursor()
+#     cur.execute("""
+#         SELECT 
+#           s.candidate_key || ' / ' || s.filename AS resume_id,
+#           c.name AS category,
+#           s.score
+#         FROM resume_category_score s
+#         JOIN skill_category c ON c.id = s.category_id
+#     """)
+#     rows = cur.fetchall()
+#     cur.close()
+#     conn.close()
+
+#     if not rows:
+#         st.info("No category scores yet.")
+#     else:
+#         # 1) Build the pivot table
+#         df    = pd.DataFrame(rows, columns=["resume_id", "category", "score"])
+#         pivot = (
+#             df.pivot(index="resume_id", columns="category", values="score")
+#               .fillna(0)
+#               .astype(int)
+#         )
+
+#         # 2) Compute an “average score” helper column
+#         pivot["avg_score"] = pivot.mean(axis=1)
+
+#         # 3) Let user choose which column to sort by
+#         sort_columns = ["Average Score"] + [c for c in pivot.columns if c != "avg_score"]
+#         sort_by     = st.selectbox("Sort by", sort_columns, index=0)
+
+#         # 4) Ascending vs Descending toggle
+#         asc = st.checkbox("Ascending", value=False, help="Uncheck for high→low")
+
+#         # 5) Perform the sort
+#         if sort_by == "Average Score":
+#             sorted_df = pivot.sort_values("avg_score", ascending=asc)
+#         else:
+#             sorted_df = pivot.sort_values(sort_by,       ascending=asc)
+
+#         # 6) Page through the results
+#         total = len(sorted_df)
+#         show_n = st.slider(
+#             "Show top N resumes",
+#             min_value=1,
+#             max_value=min(50, total),
+#             value=min(10, total)
+#         )
+
+#         # 7) Display only the requested slice (drop the helper col)
+#         display_df = sorted_df.drop("avg_score", axis=1).head(show_n)
+#         st.dataframe(display_df)
+
+#         # 8) Offer CSV download
+#         csv = display_df.to_csv().encode("utf-8")
+#         st.download_button("⬇️ Download CSV", csv, "category_scores.csv", "text/csv")
+    
 # ──────────────────────────────────────────────────────────────────────────────
 # Ingestion Mode
 # ──────────────────────────────────────────────────────────────────────────────
@@ -499,6 +703,105 @@ elif mode == "✏️ Manual Add":
 elif mode == "🗑️ Deletion":
     render_deletion_tab()
     
+    st.markdown("---")
+    st.markdown("### 🧹 Bulk Delete All Data")
+    st.warning("⚠️ This will permanently erase **all** candidate and resume data. Use with extreme caution!")
+
+    # ── A) If we just succeeded, show banner and clear flag ───────────
+    if st.session_state.get("delete_success", False):
+        st.success("✅ All records have been deleted.")
+        # clear so it only shows once
+        del st.session_state["delete_success"]
+
+    # ── B) Handle the confirm checkbox default (cleared after delete) ──
+    if st.session_state.get("deleted_all_once", False):
+        default_confirm = False
+        del st.session_state["deleted_all_once"]
+    else:
+        default_confirm = st.session_state.get("confirm_delete_all", False)
+
+    confirm = st.checkbox(
+        "I understand this cannot be undone",
+        value=default_confirm,
+        key="confirm_delete_all",
+    )
+
+    # ── C) Single “Delete All” button ───────────────────────────────
+    if st.button("🗑️ DELETE ALL RECORDS", key="delete_all_btn"):
+        if not confirm:
+            st.error("You must check the box above to delete everything.")
+        else:
+            try:
+                env  = load_env_vars()
+                conn = connect_postgres(env)
+                cur  = conn.cursor()
+                cur.execute("""
+                    TRUNCATE TABLE
+                      public.resumes_metadata,
+                      public.resumes_normal,
+                      public.resume_category_score
+                    RESTART IDENTITY CASCADE;
+                """)
+                conn.commit()
+                cur.close()
+                conn.close()
+
+                # instead of st.success(), set a flag and rerun
+                st.session_state["delete_success"]   = True
+                st.session_state["deleted_all_once"] = True
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Failed to delete all records: {e}")
+    
+    # st.markdown("---")
+    # st.markdown("### 🧹 Bulk Delete All Data")
+    # st.warning("⚠️ This will permanently erase **all** candidate and resume data. Use with extreme caution!")
+
+    # # ── 1) Check if we just deleted everything ─────────────────────────────
+    # if st.session_state.get("deleted_all_once", False):
+    #     default_confirm = False
+    #     # clear the flag so we only do this clearing once
+    #     del st.session_state["deleted_all_once"]
+    # else:
+    #     default_confirm = st.session_state.get("confirm_delete_all", False)
+
+    # # ── 2) Render the checkbox with our computed default ───────────────────
+    # confirm = st.checkbox(
+    #     "I understand this cannot be undone",
+    #     value=default_confirm,
+    #     key="confirm_delete_all",
+    # )
+
+    # # ── 3) Single button to delete everything ──────────────────────────────
+    # if st.button("🗑️ DELETE ALL RECORDS", key="delete_all_btn"):
+    #     if not confirm:
+    #         st.error("You must check the confirmation box above to delete everything.")
+    #     else:
+    #         try:
+    #             env  = load_env_vars()
+    #             conn = connect_postgres(env)
+    #             cur  = conn.cursor()
+
+    #             cur.execute("""
+    #                 TRUNCATE TABLE
+    #                   public.resumes_metadata,
+    #                   public.resumes_normal,
+    #                   public.resume_category_score
+    #                 RESTART IDENTITY CASCADE;
+    #             """)
+    #             conn.commit()
+    #             cur.close()
+    #             conn.close()
+
+    #             st.success("✅ All records have been deleted.")
+
+    #             # set our one-time flag and rerun so the checkbox is cleared
+    #             st.session_state["deleted_all_once"] = True
+    #             # st.rerun()
+
+    #         except Exception as e:
+    #             st.error(f"❌ Failed to delete all records: {e}")
 
 elif mode == "🔍 Filter Records":
     if "matched_files" not in st.session_state:
