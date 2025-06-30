@@ -14,6 +14,7 @@ import numpy as np
 import pickle
 from pathlib import Path
 import re
+import pytesseract
 
 from pdf2image import convert_from_path    # pip install pdf2image
 from dotenv import load_dotenv
@@ -174,16 +175,44 @@ def extract_skills_from_pdf(pdf_path: str) -> list[str]:
     return skills
 
 
+# def extract_full_text(pdf_path: str) -> str:
+#     """
+#     Read every page of the PDF at pdf_path and concatenate its text.
+#     """
+#     text_parts = []
+#     # open the PDF
+#     with fitz.open(pdf_path) as doc:
+#         for page in doc:
+#             text_parts.append(page.get_text())
+#     return "\n".join(text_parts)
+
 def extract_full_text(pdf_path: str) -> str:
     """
-    Read every page of the PDF at pdf_path and concatenate its text.
+    Extract text from a PDF. First tries PyMuPDF’s native extraction;
+    if that yields no text, falls back to OCR via pytesseract.
     """
+    # 1) Attempt native text extraction
     text_parts = []
-    # open the PDF
     with fitz.open(pdf_path) as doc:
         for page in doc:
-            text_parts.append(page.get_text())
-    return "\n".join(text_parts)
+            page_text = page.get_text().strip()
+            if page_text:
+                text_parts.append(page_text)
+    full_text = "\n".join(text_parts).strip()
+    if full_text:
+        return full_text
+
+    # 2) Fallback to OCR
+    ocr_parts = []
+    images = convert_from_path(pdf_path, dpi=300)
+    for img in images:
+        try:
+            # --psm 3: Fully automatic page segmentation
+            text = pytesseract.image_to_string(img, lang="eng", config="--psm 3")
+            ocr_parts.append(text.strip())
+        except Exception as e:
+            print(f"OCR failed on one page: {e}")
+    return "\n\n".join(ocr_parts)
 
 EXPERIENCE_SUMMARY_PROMPT = """
 You are an expert resume parser. Analyze this resume page image and extract ALL sections in the EXACT ORDER they appear from top to bottom.
