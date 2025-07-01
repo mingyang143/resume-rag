@@ -97,16 +97,39 @@ def load_env_vars():
         raise RuntimeError(f"Missing required environment variables: {missing}")
     return env
 
-def ensure_resumes_table(cur) -> None:
+# def ensure_resumes_table(cur) -> None:
+#     """
+#     Creates the `resumes_metadata` table if it does not exist,
+#     adding a candidate_key to link to the normal resume.
+#     """
+#     cur.execute(
+#         """
+#         CREATE TABLE IF NOT EXISTS public.resumes_metadata (
+#             filename               TEXT           NOT NULL PRIMARY KEY,
+#             candidate_key          TEXT           NOT NULL,
+#             work_duration_category TEXT,
+#             university             TEXT,
+#             applied_position       TEXT,
+#             salary                 TEXT,
+#             part_or_full           TEXT,
+#             is_credit_bearing      TEXT,
+#             citizenship            TEXT,
+#             from_date              TEXT,
+#             to_date                TEXT
+#         );
+#         """
+#     )
+
+
+def ensure_resumes_table(cur):
     """
-    Creates the `resumes_metadata` table if it does not exist,
-    adding a candidate_key to link to the normal resume.
+    Ensure the resumes_metadata table exists with all required columns including email.
     """
-    cur.execute(
-        """
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS public.resumes_metadata (
-            filename               TEXT           NOT NULL PRIMARY KEY,
-            candidate_key          TEXT           NOT NULL,
+            filename               TEXT PRIMARY KEY,
+            candidate_key          TEXT NOT NULL,
+            email                  TEXT NOT NULL,  -- Make sure this is here
             work_duration_category TEXT,
             university             TEXT,
             applied_position       TEXT,
@@ -117,8 +140,57 @@ def ensure_resumes_table(cur) -> None:
             from_date              TEXT,
             to_date                TEXT
         );
-        """
-    )
+    """)
+
+
+# def upsert_resume_metadata(
+#     cur,
+#     filename: str,
+#     candidate_key: str,
+#     fields: Dict[str, Optional[str]]
+# ) -> None:
+#     """
+#     Inserts or updates a row in resumes_metadata, now with candidate_key.
+#     """
+#     cur.execute(
+#         """
+#         INSERT INTO public.resumes_metadata
+#             (filename, candidate_key,
+#              work_duration_category, university, applied_position,
+#              salary, part_or_full, is_credit_bearing, citizenship,
+#              from_date, to_date)
+#         VALUES (
+#             %s, %s,
+#             %s, %s, %s,
+#             %s, %s, %s, %s,
+#             %s, %s
+#         )
+#         ON CONFLICT (filename) DO UPDATE
+#           SET candidate_key          = EXCLUDED.candidate_key,
+#               work_duration_category = EXCLUDED.work_duration_category,
+#               university             = EXCLUDED.university,
+#               applied_position       = EXCLUDED.applied_position,
+#               salary                 = EXCLUDED.salary,
+#               part_or_full           = EXCLUDED.part_or_full,
+#               is_credit_bearing      = EXCLUDED.is_credit_bearing,
+#               citizenship            = EXCLUDED.citizenship,
+#               from_date              = EXCLUDED.from_date,
+#               to_date                = EXCLUDED.to_date;
+#         """,
+#         [
+#             filename,
+#             candidate_key,
+#             fields.get("work_duration_category"),
+#             fields.get("university"),
+#             fields.get("applied_position"),
+#             fields.get("salary"),
+#             fields.get("part_or_full"),
+#             fields.get("is_credit_bearing"),
+#             fields.get("citizenship"),
+#             fields.get("from_date"),
+#             fields.get("to_date"),
+#         ]
+#     )
 
 def upsert_resume_metadata(
     cur,
@@ -127,23 +199,24 @@ def upsert_resume_metadata(
     fields: Dict[str, Optional[str]]
 ) -> None:
     """
-    Inserts or updates a row in resumes_metadata, now with candidate_key.
+    Inserts or updates a row in resumes_metadata, now with candidate_key and email.
     """
     cur.execute(
         """
         INSERT INTO public.resumes_metadata
-            (filename, candidate_key,
+            (filename, candidate_key, email,
              work_duration_category, university, applied_position,
              salary, part_or_full, is_credit_bearing, citizenship,
              from_date, to_date)
         VALUES (
-            %s, %s,
+            %s, %s, %s,
             %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s
         )
         ON CONFLICT (filename) DO UPDATE
           SET candidate_key          = EXCLUDED.candidate_key,
+              email                  = EXCLUDED.email,
               work_duration_category = EXCLUDED.work_duration_category,
               university             = EXCLUDED.university,
               applied_position       = EXCLUDED.applied_position,
@@ -157,6 +230,7 @@ def upsert_resume_metadata(
         [
             filename,
             candidate_key,
+            fields.get("email"),  # ADD THIS LINE
             fields.get("work_duration_category"),
             fields.get("university"),
             fields.get("applied_position"),
@@ -631,6 +705,108 @@ def remove_candidate_from_faiss(index, metadata, candidate_key: str, filename: s
     return index
 
 
+def ensure_email_templates_table(cur):
+    """
+    Ensure the email_templates table exists with required columns.
+    """
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS public.email_templates (
+            id SERIAL PRIMARY KEY,
+            template_name VARCHAR(100) UNIQUE NOT NULL,
+            subject_template TEXT NOT NULL,
+            body_template TEXT NOT NULL,
+            template_type VARCHAR(50),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    
+    # Insert default templates if they don't exist
+    default_templates = [
+        {
+            'name': 'offer_template',
+            'subject': 'Job Offer - {position} at {company}',
+            'body': '''Dear {candidate_name},
+
+We are pleased to offer you the position of {position} at {company}.
+
+Position Details:
+- Role: {position}
+- Employment Type: {employment_type}
+- Duration: {duration}
+- Salary: {salary}
+- Start Date: {start_date}
+
+We believe your skills and experience make you an excellent fit for our team.
+
+Please reply to confirm your acceptance by [DATE].
+
+Best regards,
+{sender_name}
+{company}''',
+            'type': 'offer'
+        },
+        {
+            'name': 'rejection_email',
+            'subject': 'Update on Your Application - {position}',
+            'body': '''Dear {candidate_name},
+
+Thank you for your interest in the {position} position and for taking the time to apply.
+
+After careful consideration, we have decided to move forward with other candidates whose experience more closely matches our current needs.
+
+We appreciate the time you invested in the application process and encourage you to apply for future opportunities.
+
+Best wishes for your career development.
+
+Best regards,
+{sender_name}
+{company}''',
+            'type': 'rejection'
+        },
+        {
+            'name': 'interview_invitation',
+            'subject': 'Interview Invitation - {position}',
+            'body': '''Dear {candidate_name},
+
+Thank you for your application for the {position} position. We would like to invite you for an interview.
+
+Interview Details:
+- Position: {position}
+- Date: [TO BE SCHEDULED]
+- Time: [TO BE SCHEDULED]  
+- Format: [ONLINE/IN-PERSON]
+- Duration: Approximately 45 minutes
+
+Please reply with your availability so we can schedule the interview.
+
+Best regards,
+{sender_name}
+{company}''',
+            'type': 'interview'
+        }
+    ]
+    
+    for template in default_templates:
+        cur.execute("""
+            INSERT INTO public.email_templates (template_name, subject_template, body_template, template_type)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (template_name) DO NOTHING;
+        """, (template['name'], template['subject'], template['body'], template['type']))
+
+def initialize_database():
+    """Initialize all required database tables"""
+    env = load_env_vars()
+    conn = connect_postgres(env)
+    cur = conn.cursor()
+    
+    ensure_resumes_table(cur)
+    ensure_resumes_normal_table(cur)
+    ensure_email_templates_table(cur)  # Add this line
+    
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 

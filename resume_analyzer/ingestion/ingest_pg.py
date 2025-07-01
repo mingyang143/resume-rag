@@ -45,6 +45,7 @@ def extract_fields_with_qwen(
     in Python we compute the 'work_duration_category' by parsing those two fields.
 
     Returns a dict with keys:
+      • email                    (email address or None)
       • work_duration_category   (one of "2-4 MONTHS"/"5-7 MONTHS"/"MORE THAN 7 MONTHS"/None)
       • university               (string or None)
       • applied_position         (string or None)
@@ -57,6 +58,7 @@ def extract_fields_with_qwen(
     """
 
     fields: Dict[str, Optional[str]] = {
+        "email":                  None,
         "work_duration_category": None,
         "university":             None,
         "applied_position":       None,
@@ -74,10 +76,11 @@ def extract_fields_with_qwen(
         "(an internship application form).  First, locate the “JOB APPLICATION” "
         "section (if it exists) on this page.  Within that section (or anywhere "
         "else on the page if no such heading exists), extract exactly the "
-        "following nine fields and return precisely one JSON object (no extra text):\n\n"
+        "following ten fields and return precisely one JSON object (no extra text):\n\n"
 
-        "  1. from_date            (raw start date of the FIRST complete date–range under the label “Intended Internship Period,” exactly as it appears, or null)\n"
-        "  2. to_date              (raw end date of that FIRST complete date–range under the label “Intended Internship Period,” exactly as it appears, or null)\n"
+        "  1. email                (email address from personal information section; e.g. \"john.doe@university.edu\" or null if not found)\n\n"
+        "  2. from_date            (raw start date of the FIRST complete date–range under the label “Intended Internship Period,” exactly as it appears, or null)\n"
+        "  3. to_date              (raw end date of that FIRST complete date–range under the label “Intended Internship Period,” exactly as it appears, or null)\n"
         "     – Only look at the dates listed next to “Intended Internship Period:”.  \n"
         "     – IF you ever see a slash (\"/\") in the date field, **ignore everything before the slash**.  \n"
         "       For example, if the text reads “20 May/10 July 2025”, treat “10 July” as the end date.  \n"
@@ -92,16 +95,16 @@ def extract_fields_with_qwen(
         "     – If no date–range appears under “Intended Internship Period,” set both from_date and to_date to null.\n\n"
 
 
-        "  3. university              (text string from the “JOB APPLICATION” or Education\n"
+        "  4. university              (text string from the “JOB APPLICATION” or Education\n"
         "                             area, or null if not found)\n\n"
 
-        "  4. applied_position        (text string from the “JOB APPLICATION” section; e.g.\n"
+        "  5. applied_position        (text string from the “JOB APPLICATION” section; e.g.\n"
         "                             “GenAI Marketing & Promotion Intern,” or null if not found)\n\n"
 
-        "  5. salary                  (text string found under the “School Recommended Internship Fee” section;\n"
+        "  6. salary                  (text string found under the “School Recommended Internship Fee” section;\n"
         "                             e.g. “$1500/month” or “$15/hr,” or null if not found)\n\n"
 
-        "  6. part_or_full            (ONE-word code: \n"
+        "  7. part_or_full            (ONE-word code: \n"
         "       – You are examining the **JOB APPLICATION** section of a resume. Your task:\n"
         "       – Find the exact question: “Is this a full-time or part-time internship?”\n"
         "       – Read its answer:\n"
@@ -110,7 +113,7 @@ def extract_fields_with_qwen(
         "       – If the answer is not clear, or if no such question is found, return null)\n\n"
         "       **Important:** Do **not** infer from any other part of the resume. Focus only on that one question and its immediate answer.\n\n"   
 
-        "  7. is_credit_bearing       (ONE-word code:  \n"
+        "  8. is_credit_bearing       (ONE-word code:  \n"
         "       – You are examining the **JOB APPLICATION** section of a resume. Your task:\n"
         "       – Find the exact question: “Is this Internship School Credit Bearing?”\n"
         "       – Read its answer:\n"
@@ -119,7 +122,7 @@ def extract_fields_with_qwen(
         "       – If the answer is not clear, or if no such question is found, return null)\n\n"
         "       **Important:** Do **not** infer from any other part of the resume. Focus only on that one question and its immediate answer.\n\n"   
 
-        "  8. citizenship             (ONE-word code based on the “Citizenship” checkbox row:  \n"
+        "  9. citizenship             (ONE-word code based on the “Citizenship” checkbox row:  \n"
         "       – “CITIZEN” if the checkbox next to “Citizen” is checked,\n"
         "       – “PR”      if the checkbox next to “Singapore PR” is checked,\n"
         "       – “FOREIGNER” if the checkbox next to “Foreigner” is checked,\n"
@@ -128,7 +131,8 @@ def extract_fields_with_qwen(
         "If any field is missing on this page (or in the “JOB APPLICATION” section), "
         "set that field’s value to null.  Do not return any extra keys beyond these nine.  "
         "Example valid output:\n"
-        "{\"from_date\":\"10 June 2025\","
+        "{\"email\":\"john.doe@university.edu\","
+        "\"from_date\":\"10 June 2025\","
         "\"to_date\":\"12 July 2025\","
         "\"university\":\"National University of Singapore\","
         "\"applied_position\":\"GenAI Marketing & Promotion Intern\","

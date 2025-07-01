@@ -23,14 +23,24 @@ from resume_analyzer.ingestion.helpers import (
 )
 from resume_analyzer.ingestion.ingest_normal import ingest_resume_normal
 from resume_analyzer.backend.model import Qwen2VLClient
-from resume_analyzer.backend.helpers import chat_with_resumes, fetch_candidate_keys
+from resume_analyzer.backend.helpers import chat_with_resumes, fetch_candidate_keys, detect_email_intent
 from resume_analyzer.ingestion.ingest_normal import ingest_resume_normal
 from resume_analyzer.ingestion.ingest_pg import extract_fields_with_qwen, qwen_client
-from resume_analyzer.ingestion.helpers import convert_docx_to_pdf_via_libreoffice
+from resume_analyzer.ingestion.helpers import convert_docx_to_pdf_via_libreoffice, initialize_database
 from resume_analyzer.frontend.helpers import render_deletion_tab, render_overview_dashboard, get_quick_stats, render_skills_management_tab, render_score_table, render_delete_all_resumes
+from resume_analyzer.backend.email_service import EmailService
 from pdf2image import convert_from_path
 import tempfile
 import json
+
+email_service = EmailService()
+
+try:
+    initialize_database()
+    print("✅ Database initialized successfully")
+except Exception as e:
+    print(f"❌ Error initializing database: {e}")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -360,6 +370,13 @@ elif mode == "✏️ Manual Add":
                     placeholder="e.g., National University of Singapore"
                 )
                 
+                email = st.text_input(
+                    "📧 Email Address",
+                    value=extracted.get('email', ''),
+                    placeholder="e.g., student@university.edu",
+                    help="Required field for sending notifications"
+                )
+                
                 applied_position = st.text_input(
                     "💼 Applied Position",
                     value=extracted.get('applied_position', ''),
@@ -413,6 +430,7 @@ elif mode == "✏️ Manual Add":
             st.markdown("##### 👀 Preview")
             preview_data = {
                 "candidate_key": candidate_key,
+                "email": email or None,
                 "work_duration_category": work_duration or None,
                 "university": university or None,
                 "applied_position": applied_position or None,
@@ -431,6 +449,8 @@ elif mode == "✏️ Manual Add":
             if ingest_folder_button:
                 if not candidate_key.strip():
                     st.error("❌ Candidate key is required")
+                elif not email.strip():
+                    st.error("❌ Email address is required")
                 else:
                     try:
                         # Connect to database
@@ -449,6 +469,7 @@ elif mode == "✏️ Manual Add":
                             
                             # Prepare metadata fields from the edited form
                             fields = {
+                                "email": email.strip(),
                                 "work_duration_category": work_duration.strip() or None,
                                 "university": university.strip() or None,
                                 "applied_position": applied_position.strip() or None,
@@ -728,41 +749,69 @@ elif mode == "🔍 Filter Records":
                 # Add user message to history
                 st.session_state[chat_key].append({"role":"user","content":user_input})
                 st.chat_message("user").write(user_input)
+                
+                # Check if this is an email request using LLM
+                filename_to_candidate = fetch_candidate_keys(matched)
+                current_candidate_keys = list(set(filename_to_candidate.values()))
+                email_intent = detect_email_intent(user_input, current_candidate_keys)
 
-                # Show processing indicator
-                with st.spinner("🤔 Analyzing your question..."):
-                    try:
-                        # Use the intelligent chat function
-                        result = chat_with_resumes(
-                            user_query=user_input,
-                            candidate_keys=candidate_keys,
-                            context_limit=3
-                        )
-                        
-                        # Get the response
-                        reply = result["answer"]
-                        query_type = result["query_type"]
-                        skills_extracted = result.get("skills_extracted", [])
-                        candidates_analyzed = result.get("candidates_analyzed", [])
-                        
-                        # Add metadata to the response for transparency
-                        if query_type == "skill_matching" and skills_extracted:
-                            reply += f"\n\n*🔍 Skills identified: {', '.join(skills_extracted)}*"
-                        
-                        if candidates_analyzed:
-                            reply += f"\n\n*👥 Candidates analyzed: {', '.join(candidates_analyzed)}*"
-                        
-                        print("----------------------------------------------------")
-                        print(f"Chat response - Query type: {query_type}")
-                        print(f"Skills extracted: {skills_extracted}")
-                        print(f"Candidates analyzed: {candidates_analyzed}")
-                        print("----------------------------------------------------")
-                        
-                    except Exception as e:
-                        reply = f"❌ I encountered an error while processing your question: {str(e)}"
-                        print("----------------------------------------------------")
-                        print(f"Chat error: {e}")
-                        print("----------------------------------------------------")
+                if email_intent['is_email_request']:
+                    # Handle email sending
+                    template_type = email_intent['template_type']
+                    candidate_key = email_intent['candidate_key']
+                    
+                    if not candidate_key:
+                        reply = f"❌ I understand you want to send an email, but I couldn't identify which candidate you're referring to. Available candidates in current results: {', '.join(current_candidate_keys)}"
+                    elif not template_type:
+                        reply = f"❌ I understand you want to send an email to {candidate_key}, but I couldn't determine what type of email. Available types: offer, rejection, interview."
+                    else:
+                        with st.spinner(f"📧 Sending {template_type.replace('_', ' ')} to {candidate_key}..."):
+                            try:
+                                result = email_service.send_template_email(candidate_key, template_type)
+                                
+                                if result['success']:
+                                    reply = f"✅ {result['message']}\n\n**Subject:** {result['subject']}\n\n**Email Preview:**\n{result['body'][:200]}..."
+                                else:
+                                    reply = f"❌ Failed to send email: {result['error']}"
+                                    
+                            except Exception as e:
+                                reply = f"❌ Error sending email: {str(e)}"
+                else:
+                    # Handle regular chat
+                    # Show processing indicator
+                    with st.spinner("🤔 Analyzing your question..."):
+                        try:
+                            # Use the intelligent chat function
+                            result = chat_with_resumes(
+                                user_query=user_input,
+                                candidate_keys=candidate_keys,
+                                context_limit=3
+                            )
+                            
+                            # Get the response
+                            reply = result["answer"]
+                            query_type = result["query_type"]
+                            skills_extracted = result.get("skills_extracted", [])
+                            candidates_analyzed = result.get("candidates_analyzed", [])
+                            
+                            # Add metadata to the response for transparency
+                            if query_type == "skill_matching" and skills_extracted:
+                                reply += f"\n\n*🔍 Skills identified: {', '.join(skills_extracted)}*"
+                            
+                            if candidates_analyzed:
+                                reply += f"\n\n*👥 Candidates analyzed: {', '.join(candidates_analyzed)}*"
+                            
+                            print("----------------------------------------------------")
+                            print(f"Chat response - Query type: {query_type}")
+                            print(f"Skills extracted: {skills_extracted}")
+                            print(f"Candidates analyzed: {candidates_analyzed}")
+                            print("----------------------------------------------------")
+                            
+                        except Exception as e:
+                            reply = f"❌ I encountered an error while processing your question: {str(e)}"
+                            print("----------------------------------------------------")
+                            print(f"Chat error: {e}")
+                            print("----------------------------------------------------")
                 
                 # Add assistant response to history and display
                 st.session_state[chat_key].append({"role":"assistant","content":reply})
@@ -780,4 +829,12 @@ elif mode == "🔍 Filter Records":
             - "What's Leon's educational background?"
             - "Tell me about Xiang's work experience"
             - "What projects has DIAN worked on?"
+            
+            **Email commands:**
+            - "Send an offer email to Leon"
+            - "I want to reject Xiang via email"
+            - "Email an interview invitation to Dian"
+            - "Offer the position to John"
+            - "Send rejection letter to Alice"
+            - "Invite Bob for an interview"
             """)

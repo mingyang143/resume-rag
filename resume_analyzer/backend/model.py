@@ -15,7 +15,7 @@ class Qwen2VLClient:
         port: int = 8001,
         model: str = "Qwen/Qwen2.5-VL-7B-Instruct",
         temperature: float = 0.7,
-        timeout: float = 120.0,
+        timeout: float = 1200.0,
     ):
         """
         Args:

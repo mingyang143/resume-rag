@@ -873,3 +873,95 @@ if __name__ == "__main__":
     # print(f"📁 Additional Info: {detail_result['additional_info']}")
     # print("----------------------------------------------------")
     
+def detect_email_intent(user_input: str, candidate_keys: List[str]) -> Dict[str, any]:
+    """
+    Use LLM to detect if user wants to send an email and extract details.
+    Much more flexible than regex patterns.
+    """
+    candidates_list = ", ".join(candidate_keys)
+    
+    EMAIL_INTENT_PROMPT = f"""
+        Analyze this user query to determine if they want to send an email to a candidate.
+
+        USER QUERY: "{user_input}"
+        AVAILABLE CANDIDATES: {candidates_list}
+
+        Return a JSON object with this structure:
+        {{
+        "is_email_request": true/false,
+        "template_type": "template_name_or_null",
+        "candidate_key": "exact_candidate_key_or_null",
+        "confidence": 0.95,
+        "intent": "brief description"
+        }}
+
+        EMAIL TYPES TO DETECT:
+        1. "offer_template" - Sending job/internship offers
+        Examples: "send offer email to John", "email offer to Mary", "offer John the position"
+
+        2. "rejection_email" - Sending rejection emails  
+        Examples: "send rejection to Alice", "reject Bob via email", "email rejection to Tom"
+
+        3. "interview_invitation" - Sending interview invitations
+        Examples: "invite Sarah for interview", "send interview email to Mike", "schedule interview with Lisa"
+
+        CANDIDATE MATCHING:
+        - Look for candidate names mentioned in the query
+        - Match against available candidates (case-insensitive, partial matching OK)
+        - Return the EXACT candidate key from the available list
+
+        RULES:
+        - Only return is_email_request: true if clearly requesting to send an email
+        - Match candidate names intelligently (nicknames, partial names, etc.)
+        - If no clear candidate match, set candidate_key to null
+        - If not an email request, set template_type and candidate_key to null
+
+        Return ONLY the JSON object.
+        """
+    
+    try:
+        reply = qwen.chat_completion(
+            question=EMAIL_INTENT_PROMPT,
+            system_prompt="You are an expert at understanding email-related requests in HR contexts."
+        ).strip()
+        
+        # Clean up response
+        if reply.startswith("```"):
+            reply = "\n".join(
+                line for line in reply.splitlines()
+                if not line.strip().startswith("```")
+            ).strip()
+        
+        email_intent = json.loads(reply)
+        
+        # Validate the response structure
+        required_fields = ["is_email_request", "template_type", "candidate_key"]
+        if not all(field in email_intent for field in required_fields):
+            print(f"Invalid email intent response: {email_intent}")
+            return {'is_email_request': False}
+        
+        # Additional validation - ensure candidate exists if specified
+        if email_intent['is_email_request'] and email_intent['candidate_key']:
+            if email_intent['candidate_key'] not in candidate_keys:
+                # Try to find a close match
+                candidate_key_lower = email_intent['candidate_key'].lower()
+                for key in candidate_keys:
+                    if candidate_key_lower in key.lower() or key.lower() in candidate_key_lower:
+                        email_intent['candidate_key'] = key
+                        break
+                else:
+                    # No match found
+                    email_intent['candidate_key'] = None
+                    email_intent['intent'] = f"Candidate '{email_intent['candidate_key']}' not found in current results"
+        
+        print("----------------------------------------------------")
+        print(f"📧 Email intent detected: {email_intent}")
+        print("----------------------------------------------------")
+        
+        return email_intent
+        
+    except (json.JSONDecodeError, ValueError) as e:
+        print("----------------------------------------------------")
+        print(f"Error detecting email intent: {e}")
+        print("----------------------------------------------------")
+        return {'is_email_request': False}
