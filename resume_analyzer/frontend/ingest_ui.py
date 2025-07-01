@@ -42,6 +42,10 @@ except Exception as e:
     print(f"❌ Error initializing database: {e}")
 
 
+# Initialize session state for pending emails
+if 'pending_email' not in st.session_state:
+    st.session_state.pending_email = None
+
 # ──────────────────────────────────────────────────────────────────────────────
 
 load_dotenv()  # In case helpers need environment variables
@@ -745,96 +749,400 @@ elif mode == "🔍 Filter Records":
 
             # user input
             user_input = st.chat_input("Ask me anything about these candidates...", key="input_"+chat_key)
+
             if user_input:
                 # Add user message to history
                 st.session_state[chat_key].append({"role":"user","content":user_input})
                 st.chat_message("user").write(user_input)
                 
-                # Check if this is an email request using LLM
-                filename_to_candidate = fetch_candidate_keys(matched)
-                current_candidate_keys = list(set(filename_to_candidate.values()))
-                email_intent = detect_email_intent(user_input, current_candidate_keys)
-
-                if email_intent['is_email_request']:
-                    # Handle email sending
-                    template_type = email_intent['template_type']
-                    candidate_key = email_intent['candidate_key']
+                # Check if this is a confirmation response FIRST (outside all other logic)
+                if st.session_state.get('pending_email'):
+                    confirmation_words = ['send', 'yes', 'confirm', 'ok', 'proceed', 'go ahead', 'y']
+                    cancel_words = ['cancel', 'no', 'stop', 'abort', 'don\'t send', 'n']
                     
-                    if not candidate_key:
-                        reply = f"❌ I understand you want to send an email, but I couldn't identify which candidate you're referring to. Available candidates in current results: {', '.join(current_candidate_keys)}"
-                    elif not template_type:
-                        reply = f"❌ I understand you want to send an email to {candidate_key}, but I couldn't determine what type of email. Available types: offer, rejection, interview."
-                    else:
-                        with st.spinner(f"📧 Sending {template_type.replace('_', ' ')} to {candidate_key}..."):
+                    user_response = user_input.lower().strip()
+                    
+                    # Use exact word matching instead of substring matching
+                    is_confirmation = any(user_response == word or user_response.startswith(word + ' ') or user_response.endswith(' ' + word) for word in confirmation_words)
+                    is_cancellation = any(user_response == word or user_response.startswith(word + ' ') or user_response.endswith(' ' + word) for word in cancel_words)
+                    
+                    if is_confirmation:
+                        # User confirmed - send the email
+                        pending = st.session_state.pending_email
+                        
+                        with st.spinner(f"📧 Sending {pending['template_type'].replace('_', ' ')} to {pending['candidate_key']}..."):
                             try:
-                                result = email_service.send_template_email(candidate_key, template_type)
-                                
+                                result = email_service.send_template_email_with_fields(
+                                    pending['candidate_key'], 
+                                    pending['template_type'], 
+                                    pending['extracted_fields'],
+                                    preview_only=False  # Actually send this time
+                                )
+
                                 if result['success']:
-                                    reply = f"✅ {result['message']}\n\n**Subject:** {result['subject']}\n\n**Email Preview:**\n{result['body'][:200]}..."
+                                    reply = f"✅ {result['message']}"
+                                    
+                                    # Show final confirmation
+                                    with st.expander("📧 Email Sent Details"):
+                                        st.write(f"**To:** {pending['recipient_email']}")
+                                        st.write(f"**Subject:** {result['subject']}")
+                                        st.text_area("Email Body:", result['body'], height=200)
                                 else:
-                                    reply = f"❌ Failed to send email: {result['error']}"
+                                    reply = f"❌ {result['error']}"
                                     
                             except Exception as e:
                                 reply = f"❌ Error sending email: {str(e)}"
+                        
+                        # Clear pending email
+                        del st.session_state.pending_email
+                        
+                    elif is_cancellation:
+                        # User cancelled
+                        reply = "📧 Email sending cancelled."
+                        del st.session_state.pending_email
+                        
+                    else:
+                        # User entered something else - remind them about pending email
+                        pending = st.session_state.pending_email
+                        reply = f"⚠️ **Please respond to the pending email first!**\n\n"
+                        reply += f"There is an email to **{pending['candidate_key']}** waiting for your confirmation.\n\n"
+                        reply += "Please reply with:\n"
+                        reply += "• **'send'**, **'yes'**, **'confirm'**, **'ok'**, **'proceed'** to send the email\n"
+                        reply += "• **'cancel'**, **'no'**, **'stop'**, **'abort'** to cancel the email\n\n"
+                        reply += f"Your response '{user_input}' was not recognized as a clear confirmation or cancellation.\n"
+                        reply += "I cannot process other requests until you decide on this email."
+                
                 else:
-                    # Handle regular chat
-                    # Show processing indicator
-                    with st.spinner("🤔 Analyzing your question..."):
-                        try:
-                            # Use the intelligent chat function
-                            result = chat_with_resumes(
-                                user_query=user_input,
-                                candidate_keys=candidate_keys,
-                                context_limit=3
-                            )
-                            
-                            # Get the response
-                            reply = result["answer"]
-                            query_type = result["query_type"]
-                            skills_extracted = result.get("skills_extracted", [])
-                            candidates_analyzed = result.get("candidates_analyzed", [])
-                            
-                            # Add metadata to the response for transparency
-                            if query_type == "skill_matching" and skills_extracted:
-                                reply += f"\n\n*🔍 Skills identified: {', '.join(skills_extracted)}*"
-                            
-                            if candidates_analyzed:
-                                reply += f"\n\n*👥 Candidates analyzed: {', '.join(candidates_analyzed)}*"
-                            
-                            print("----------------------------------------------------")
-                            print(f"Chat response - Query type: {query_type}")
-                            print(f"Skills extracted: {skills_extracted}")
-                            print(f"Candidates analyzed: {candidates_analyzed}")
-                            print("----------------------------------------------------")
-                            
-                        except Exception as e:
-                            reply = f"❌ I encountered an error while processing your question: {str(e)}"
-                            print("----------------------------------------------------")
-                            print(f"Chat error: {e}")
-                            print("----------------------------------------------------")
+                    # No pending email - proceed with normal logic
+                    filename_to_candidate = fetch_candidate_keys(matched)
+                    current_candidate_keys = list(set(filename_to_candidate.values()))
+                    
+                    print("----------------------------------------------------")
+                    print(f"📧 Checking email intent for: {user_input}")
+                    print("----------------------------------------------------")
+                    
+                    email_intent = detect_email_intent(user_input, current_candidate_keys)
+                    
+                    print("----------------------------------------------------")
+                    print(f"📧 Email intent detected: {email_intent}")
+                    print("----------------------------------------------------")
+
+                    if email_intent['is_email_request']:
+                        # Handle email sending with extracted fields
+                        template_type = email_intent['template_type']
+                        candidate_key = email_intent['candidate_key']
+                        extracted_fields = email_intent.get('extracted_fields', {})
+                        
+                        if not candidate_key:
+                            reply = f"❌ I understand you want to send an email, but I couldn't identify which candidate you're referring to. Available candidates in current results: {', '.join(current_candidate_keys)}"
+                        elif not template_type:
+                            reply = f"❌ I understand you want to send an email to {candidate_key}, but I couldn't determine what type of email. Available types: offer, rejection, interview."
+                        else:
+                            # First time - show preview
+                            with st.spinner(f"📧 Preparing {template_type.replace('_', ' ')} for {candidate_key}..."):
+                                try:
+                                    result = email_service.send_template_email_with_fields(
+                                        candidate_key, 
+                                        template_type, 
+                                        extracted_fields,
+                                        preview_only=True  # Preview mode
+                                    )
+
+                                    if result['success'] and result.get('preview_mode'):
+                                        # Show email preview
+                                        reply = "📧 Email Preview - Please review before sending:"
+                                        
+                                        col1, col2 = st.columns([3, 1])
+                                        with col1:
+                                            st.write(f"**To:** {result['recipient_email']}")
+                                            st.write(f"**Subject:** {result['subject']}")
+                                        with col2:
+                                            st.write(f"**Template:** {template_type}")
+                                        
+                                        # Show email body in expandable section
+                                        with st.expander("📧 Full Email Preview", expanded=True):
+                                            st.text_area("Email Body:", result['body'], height=300)
+                                        
+                                        # Store pending email in session state
+                                        st.session_state.pending_email = {
+                                            'candidate_key': candidate_key,
+                                            'template_type': template_type,
+                                            'extracted_fields': extracted_fields,
+                                            'recipient_email': result['recipient_email']
+                                        }
+                                        
+                                        # Show confirmation prompt
+                                        reply += "\n\n⚠️ **Confirmation Required:** Reply with **'send'**, **'yes'**, or **'confirm'** to send this email, or **'cancel'** to abort."
+                                        
+                                    else:
+                                        reply = f"❌ {result.get('error', 'Failed to prepare email preview')}"
+                                        
+                                except Exception as e:
+                                    reply = f"❌ Error preparing email: {str(e)}"
+
+                    else:
+                        # Handle regular chat
+                        with st.spinner("🤔 Analyzing your question..."):
+                            try:
+                                # Use the intelligent chat function
+                                result = chat_with_resumes(
+                                    user_query=user_input,
+                                    candidate_keys=candidate_keys,
+                                    context_limit=3
+                                )
+                                
+                                # Get the response
+                                reply = result["answer"]
+                                query_type = result["query_type"]
+                                skills_extracted = result.get("skills_extracted", [])
+                                candidates_analyzed = result.get("candidates_analyzed", [])
+                                
+                                # Add metadata to the response for transparency
+                                if query_type == "skill_matching" and skills_extracted:
+                                    reply += f"\n\n*🔍 Skills identified: {', '.join(skills_extracted)}*"
+                                
+                                if candidates_analyzed:
+                                    reply += f"\n\n*👥 Candidates analyzed: {', '.join(candidates_analyzed)}*"
+                                
+                                print("----------------------------------------------------")
+                                print(f"Chat response - Query type: {query_type}")
+                                print(f"Skills extracted: {skills_extracted}")
+                                print(f"Candidates analyzed: {candidates_analyzed}")
+                                print("----------------------------------------------------")
+                                
+                            except Exception as e:
+                                reply = f"❌ I encountered an error while processing your question: {str(e)}"
+                                print("----------------------------------------------------")
+                                print(f"Chat error: {e}")
+                                print("----------------------------------------------------")
                 
                 # Add assistant response to history and display
                 st.session_state[chat_key].append({"role":"assistant","content":reply})
                 st.chat_message("assistant").write(reply)
+
+
+            
+            # if user_input:
+            #     # Add user message to history
+            #     st.session_state[chat_key].append({"role":"user","content":user_input})
+            #     st.chat_message("user").write(user_input)
+                
+            #     # Check if this is an email request using LLM
+            #     filename_to_candidate = fetch_candidate_keys(matched)
+            #     current_candidate_keys = list(set(filename_to_candidate.values()))
+            #     email_intent = detect_email_intent(user_input, current_candidate_keys)
+
+            #     # if email_intent['is_email_request']:
+            #     #     # Handle email sending with extracted fields
+            #     #     template_type = email_intent['template_type']
+            #     #     candidate_key = email_intent['candidate_key']
+            #     #     extracted_fields = email_intent.get('extracted_fields', {})
+                    
+            #     #     if not candidate_key:
+            #     #         reply = f"❌ I understand you want to send an email, but I couldn't identify which candidate you're referring to. Available candidates in current results: {', '.join(current_candidate_keys)}"
+            #     #     elif not template_type:
+            #     #         reply = f"❌ I understand you want to send an email to {candidate_key}, but I couldn't determine what type of email. Available types: offer, rejection, interview."
+            #     #     else:
+            #     #         # Show what fields were extracted
+            #     #         extracted_info = []
+            #     #         for field, value in extracted_fields.items():
+            #     #             if value:
+            #     #                 extracted_info.append(f"{field}: {value}")
+                        
+            #     #         if extracted_info:
+            #     #             st.info(f"📋 **Extracted Information:** {', '.join(extracted_info)}")
+                        
+            #     #         with st.spinner(f"📧 Sending {template_type.replace('_', ' ')} to {candidate_key}..."):
+            #     #             try:
+            #     #                 # Use the new method with extracted fields
+            #     #                 result = email_service.send_template_email_with_fields(
+            #     #                     candidate_key, 
+            #     #                     template_type, 
+            #     #                     extracted_fields
+            #     #                 )
+                                
+            #     #                 if result['success']:
+            #     #                     reply = f"✅ {result['message']}\n\n**Subject:** {result['subject']}\n\n**Email Preview:**\n{result['body'][:300]}..."
+            #     #                 else:
+            #     #                     reply = f"❌ Failed to send email: {result['error']}"
+                                    
+            #     #             except Exception as e:
+            #     #                 reply = f"❌ Error sending email: {str(e)}"
+            #     if email_intent['is_email_request']:
+            #         # Handle email sending with extracted fields
+            #         template_type = email_intent['template_type']
+            #         candidate_key = email_intent['candidate_key']
+            #         extracted_fields = email_intent.get('extracted_fields', {})
+                    
+            #         if not candidate_key:
+            #             reply = f"❌ I understand you want to send an email, but I couldn't identify which candidate you're referring to. Available candidates in current results: {', '.join(current_candidate_keys)}"
+            #         elif not template_type:
+            #             reply = f"❌ I understand you want to send an email to {candidate_key}, but I couldn't determine what type of email. Available types: offer, rejection, interview."
+            #         else:
+            #             # Extract fields from the detected email intent
+            #             extracted_fields = email_intent['extracted_fields']
+                        
+            #             # Check if this is a confirmation response
+            #             if st.session_state.get('pending_email'):
+            #                 confirmation_words = ['send', 'yes', 'confirm', 'ok', 'proceed', 'go ahead']
+            #                 cancel_words = ['cancel', 'no', 'stop', 'abort', 'don\'t send']
+                            
+            #                 user_response = user_input.lower().strip()
+                            
+            #                 if any(word in user_response for word in confirmation_words):
+            #                     # User confirmed - send the email
+            #                     pending = st.session_state.pending_email
+                                
+            #                     with st.spinner(f"📧 Sending {pending['template_type'].replace('_', ' ')} to {pending['candidate_key']}..."):
+            #                         try:
+            #                             result = email_service.send_template_email_with_fields(
+            #                                 pending['candidate_key'], 
+            #                                 pending['template_type'], 
+            #                                 pending['extracted_fields'],
+            #                                 preview_only=False  # Actually send this time
+            #                             )
+
+            #                             if result['success']:
+            #                                 reply = f"✅ {result['message']}"
+                                            
+            #                                 # Show final confirmation
+            #                                 with st.expander("📧 Email Sent Details"):
+            #                                     st.write(f"**To:** {pending['recipient_email']}")
+            #                                     st.write(f"**Subject:** {result['subject']}")
+            #                                     st.text_area("Email Body:", result['body'], height=200)
+            #                             else:
+            #                                 reply = f"❌ {result['error']}"
+                                            
+            #                         except Exception as e:
+            #                             reply = f"❌ Error sending email: {str(e)}"
+                                
+            #                     # Clear pending email
+            #                     del st.session_state.pending_email
+                                
+            #                 elif any(word in user_response for word in cancel_words):
+            #                     # User cancelled
+            #                     reply = "📧 Email sending cancelled."
+            #                     del st.session_state.pending_email
+                                
+            #                 else:
+            #                     # Invalid response
+            #                     reply = "Please reply with 'send', 'yes', 'confirm' to send the email, or 'cancel', 'no' to abort."
+                                
+            #             else:
+            #                 # First time - show preview
+            #                 with st.spinner(f"📧 Preparing {template_type.replace('_', ' ')} for {candidate_key}..."):
+            #                     try:
+            #                         result = email_service.send_template_email_with_fields(
+            #                             candidate_key, 
+            #                             template_type, 
+            #                             extracted_fields,
+            #                             preview_only=True  # Preview mode
+            #                         )
+
+            #                         if result['success'] and result.get('preview_mode'):
+            #                             # Show email preview
+            #                             reply = "📧 Email Preview - Please review before sending:"
+                                        
+            #                             col1, col2 = st.columns([3, 1])
+            #                             with col1:
+            #                                 st.write(f"**To:** {result['recipient_email']}")
+            #                                 st.write(f"**Subject:** {result['subject']}")
+            #                             with col2:
+            #                                 st.write(f"**Template:** {template_type}")
+                                        
+            #                             # Show email body in expandable section
+            #                             with st.expander("📧 Full Email Preview", expanded=True):
+            #                                 st.text_area("Email Body:", result['body'], height=300)
+                                        
+            #                             # Store pending email in session state
+            #                             st.session_state.pending_email = {
+            #                                 'candidate_key': candidate_key,
+            #                                 'template_type': template_type,
+            #                                 'extracted_fields': extracted_fields,
+            #                                 'recipient_email': result['recipient_email']
+            #                             }
+                                        
+            #                             # Show confirmation prompt
+            #                             reply += "\n\n⚠️ **Confirmation Required:** Reply with 'send', 'yes', or 'confirm' to send this email, or 'cancel' to abort."
+                                        
+            #                         else:
+            #                             reply = f"❌ {result.get('error', 'Failed to prepare email preview')}"
+                                        
+            #                     except Exception as e:
+            #                         reply = f"❌ Error preparing email: {str(e)}"
+
+            #     else:
+            #         # Handle regular chat
+            #         # Show processing indicator
+            #         with st.spinner("🤔 Analyzing your question..."):
+            #             try:
+            #                 # Use the intelligent chat function
+            #                 result = chat_with_resumes(
+            #                     user_query=user_input,
+            #                     candidate_keys=candidate_keys,
+            #                     context_limit=3
+            #                 )
+                            
+            #                 # Get the response
+            #                 reply = result["answer"]
+            #                 query_type = result["query_type"]
+            #                 skills_extracted = result.get("skills_extracted", [])
+            #                 candidates_analyzed = result.get("candidates_analyzed", [])
+                            
+            #                 # Add metadata to the response for transparency
+            #                 if query_type == "skill_matching" and skills_extracted:
+            #                     reply += f"\n\n*🔍 Skills identified: {', '.join(skills_extracted)}*"
+                            
+            #                 if candidates_analyzed:
+            #                     reply += f"\n\n*👥 Candidates analyzed: {', '.join(candidates_analyzed)}*"
+                            
+            #                 print("----------------------------------------------------")
+            #                 print(f"Chat response - Query type: {query_type}")
+            #                 print(f"Skills extracted: {skills_extracted}")
+            #                 print(f"Candidates analyzed: {candidates_analyzed}")
+            #                 print("----------------------------------------------------")
+                            
+            #             except Exception as e:
+            #                 reply = f"❌ I encountered an error while processing your question: {str(e)}"
+            #                 print("----------------------------------------------------")
+            #                 print(f"Chat error: {e}")
+            #                 print("----------------------------------------------------")
+                
+            #     # Add assistant response to history and display
+            #     st.session_state[chat_key].append({"role":"assistant","content":reply})
+            #     st.chat_message("assistant").write(reply)
         
-        # Show helpful examples
-        with st.expander("💡 Example questions you can ask"):
-            st.markdown("""
-            **Skill-based queries:**
-            - "Find candidates with Python and machine learning experience"
-            - "Who has React and Node.js skills?"
-            - "Which candidates know cloud computing?"
-            
-            **Candidate-specific queries:**
-            - "What's Leon's educational background?"
-            - "Tell me about Xiang's work experience"
-            - "What projects has DIAN worked on?"
-            
-            **Email commands:**
-            - "Send an offer email to Leon"
-            - "I want to reject Xiang via email"
-            - "Email an interview invitation to Dian"
-            - "Offer the position to John"
-            - "Send rejection letter to Alice"
-            - "Invite Bob for an interview"
-            """)
+       # Show helpful examples
+with st.expander("💡 Example questions you can ask"):
+    st.markdown("""
+    **Skill-based queries:**
+    - "Find candidates with Python and machine learning experience"
+    - "Who has React and Node.js skills?"
+    - "Which candidates know cloud computing?"
+    
+    **Candidate-specific queries:**
+    - "What's Leon's educational background?"
+    - "Tell me about Xiang's work experience"
+    - "What projects has DIAN worked on?"
+    
+    **Email commands:**
+    
+    **Job Offers:**
+    - "Send offer email to mingyang for software engineer position, starting January 15th, salary $2000/month, 6 months"
+    - "Email offer to john for data analyst role, beginning February 1st, salary 2500, 4 months"
+    - "Offer alice the UI/UX designer position, start Monday, $1800/month, 3 months"
+    - "Send offer to bob for summer internship, starting June 1st, salary $1500/month"
+    
+    ***Special Program Offers (ATAP & SIP):***
+    - "Send offer to lisa for ATAP program, starting March 1st, salary $2500/month"
+    - "Email offer to mike for SIP program, salary 1800, start May 12th"
+    
+    **Interview Invitations:**
+    - "Invite Sarah for interview tomorrow at 2pm via Zoom, 45 minutes"
+    - "Send interview email to Mike for January 20th at 10am, in-person, 1 hour"
+    - "Schedule interview with Lisa next Monday 3pm, online meeting, 30 minutes"
+    
+    **Job Rejection emails:**
+    - "Send rejection letter to Alice"
+    - "Reject Bob via email"
+    """)

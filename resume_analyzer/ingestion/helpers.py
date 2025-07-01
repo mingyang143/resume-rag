@@ -704,7 +704,6 @@ def remove_candidate_from_faiss(index, metadata, candidate_key: str, filename: s
     
     return index
 
-
 def ensure_email_templates_table(cur):
     """
     Ensure the email_templates table exists with required columns.
@@ -739,7 +738,7 @@ Position Details:
 
 We believe your skills and experience make you an excellent fit for our team.
 
-Please reply to confirm your acceptance by [DATE].
+Please reply to confirm your acceptance within 5 business days.
 
 Best regards,
 {sender_name}
@@ -773,12 +772,12 @@ Thank you for your application for the {position} position. We would like to inv
 
 Interview Details:
 - Position: {position}
-- Date: [TO BE SCHEDULED]
-- Time: [TO BE SCHEDULED]  
-- Format: [ONLINE/IN-PERSON]
-- Duration: Approximately 45 minutes
+- Date: {date}
+- Time: {time}  
+- Format: {format}
+- Duration: {duration}
 
-Please reply with your availability so we can schedule the interview.
+Please reply to confirm your availability for this interview slot.
 
 Best regards,
 {sender_name}
@@ -791,8 +790,13 @@ Best regards,
         cur.execute("""
             INSERT INTO public.email_templates (template_name, subject_template, body_template, template_type)
             VALUES (%s, %s, %s, %s)
-            ON CONFLICT (template_name) DO NOTHING;
+            ON CONFLICT (template_name) DO UPDATE SET
+                subject_template = EXCLUDED.subject_template,
+                body_template = EXCLUDED.body_template,
+                template_type = EXCLUDED.template_type,
+                updated_at = CURRENT_TIMESTAMP;
         """, (template['name'], template['subject'], template['body'], template['type']))
+
 
 def initialize_database():
     """Initialize all required database tables"""
