@@ -3,41 +3,33 @@ from typing import Dict, List, Optional, Tuple
 from ..backend.email_service import EmailService
 from ..backend.helpers import detect_email_intent, fetch_candidate_keys
 
-def handle_email_confirmation(user_input: str, email_service: EmailService) -> Tuple[str, bool]:
+def handle_email_confirmation(user_input: str, email_service: EmailService) -> Tuple[Optional[str], bool]:
     """
     Handle email confirmation responses.
     
     Returns:
-        Tuple[str, bool]: (reply_message, should_clear_pending)
+        Tuple[Optional[str], bool]: (reply_message, should_clear_pending)
     """
     if not st.session_state.get('pending_email'):
         return None, False
     
-    confirmation_words = ['send', 'yes', 'confirm', 'ok', 'proceed', 'go ahead', 'y']
-    cancel_words = ['cancel', 'no', 'stop', 'abort', 'don\'t send', 'n']
-    
     user_response = user_input.lower().strip()
     
-    # Use exact word matching instead of substring matching
-    is_confirmation = any(
-        user_response == word or 
-        user_response.startswith(word + ' ') or 
-        user_response.endswith(' ' + word) 
-        for word in confirmation_words
-    )
-    is_cancellation = any(
-        user_response == word or 
-        user_response.startswith(word + ' ') or 
-        user_response.endswith(' ' + word) 
-        for word in cancel_words
-    )
+    # VERY STRICT: Only accept these exact phrases for confirmation
+    confirmation_phrases = ['send', 'yes', 'confirm', 'ok', 'proceed', 'y']
+    cancel_phrases = ['cancel', 'no', 'stop', 'abort', 'n']
+    
+    is_confirmation = user_response in confirmation_phrases
+    is_cancellation = user_response in cancel_phrases
     
     if is_confirmation:
         return _send_pending_email(email_service), True
     elif is_cancellation:
         return "📧 Email sending cancelled.", True
     else:
+        # Everything else gets the reminder
         return _generate_pending_email_reminder(user_input), False
+
 
 def _send_pending_email(email_service: EmailService) -> str:
     """Send the pending email and return status message."""
@@ -171,8 +163,10 @@ def process_user_input(user_input: str, matched_files: List[str], candidate_keys
         reply, should_clear = handle_email_confirmation(user_input, email_service)
         if should_clear:
             del st.session_state.pending_email
-        return reply
+        # ALWAYS return the reply when there's a pending email (blocking other requests)
+        return reply if reply is not None else _generate_pending_email_reminder(user_input)
     
+    # Only proceed with other requests if there's NO pending email
     # Second priority: Handle new email requests
     email_reply = handle_email_request(user_input, matched_files, email_service)
     if email_reply:
@@ -180,6 +174,7 @@ def process_user_input(user_input: str, matched_files: List[str], candidate_keys
     
     # Third priority: Handle regular chat
     return _handle_regular_chat(user_input, candidate_keys)
+
 
 def _handle_regular_chat(user_input: str, candidate_keys: List[str]) -> str:
     """Handle regular chat queries."""
