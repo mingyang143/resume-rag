@@ -924,12 +924,13 @@ def detect_email_intent(user_input: str, candidate_keys: List[str]) -> Dict[str,
         - position: job/internship position (extract if mentioned)
         - date: interview date (COMPULSORY - extract from phrases like "tomorrow", "January 15", "next Monday", "15th")
         - time: interview time (COMPULSORY - extract from phrases like "2pm", "14:00", "2 o'clock", "afternoon")
-        - format: interview format (COMPULSORY - extract from phrases like "online", "zoom", "in-person", "virtual", "office")
-        - duration: interview length (COMPULSORY - extract from phrases like "45 minutes", "1 hour", "30 mins")
+        - format: interview format (OPTIONAL - extract from phrases like "online", "zoom", "in-person", "virtual", "office". Default: "in-person")
+        - duration: interview length (OPTIONAL - extract from phrases like "45 minutes", "1 hour", "30 mins". Default: "1 hour")
 
         3. "rejection_email" - Sending rejection emails
         Examples: "send rejection to Alice", "reject Bob via email", "email rejection to Tom"
-        NO SPECIAL FIELDS REQUIRED
+        OPTIONAL FIELDS TO EXTRACT:
+        - position: job/internship position (extract if mentioned, otherwise will use database default)
 
         FIELD EXTRACTION RULES:
         - Extract fields only when explicitly mentioned in the user query
@@ -1047,10 +1048,10 @@ def detect_email_intent(user_input: str, candidate_keys: List[str]) -> Dict[str,
                 "time": "2pm", 
                 "format": "Zoom",
                 "duration": "45 minutes",
-                "start_date": null, "end_date": null, "salary": null
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
             }}
         }}
-
+        
         Query: "Schedule interview with Mike for January 20th at 10am, in-person meeting, 1 hour"
         Response: {{
             "is_email_request": true,
@@ -1062,7 +1063,58 @@ def detect_email_intent(user_input: str, candidate_keys: List[str]) -> Dict[str,
                 "time": "10am",
                 "format": "in-person",
                 "duration": "1 hour",
-                "start_date": null, "end_date": null, "salary": null
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Send interview email to Lisa next Monday 3pm for software engineer position"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "interview_invitation",
+            "candidate_key": "Lisa",
+            "extracted_fields": {{
+                "position": "software engineer position",
+                "date": "next Monday",
+                "time": "3pm",
+                "format": null,
+                "duration": null,
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Send rejection letter to Alice"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "rejection_email",
+            "candidate_key": "Alice",
+            "extracted_fields": {{
+                "position": null,
+                "date": null, "time": null, "format": null, "duration": null,
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Reject Bob via email for the software engineer internship"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "rejection_email",
+            "candidate_key": "Bob",
+            "extracted_fields": {{
+                "position": "software engineer internship",
+                "date": null, "time": null, "format": null, "duration": null,
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Send rejection email to Carol for data analyst role"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "rejection_email",
+            "candidate_key": "Carol",
+            "extracted_fields": {{
+                "position": "data analyst role",
+                "date": null, "time": null, "format": null, "duration": null,
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
             }}
         }}
 

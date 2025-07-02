@@ -714,10 +714,182 @@ class EmailService:
                         # Use the employment_type from get_candidate_info as fallback
                         template_variables['employment_type'] = candidate_info.get('employment_type', 'Full-time')
 
+            # Handle rejection email fields
+            elif template_type == 'rejection_email':
+                # Position: use extracted or database default
+                if extracted_fields.get('position'):
+                    template_variables['position'] = extracted_fields['position']
+                elif candidate_info.get('applied_position'):
+                    template_variables['position'] = candidate_info['applied_position']
+                else:
+                    template_variables['position'] = 'the position you applied for'
+                
+                # No other fields required for rejection emails
+                
+            
             # Handle interview invitation fields
             elif template_type == 'interview_invitation':
-                # ... existing interview code remains the same ...
-                pass
+                # Required fields for interview
+                missing_fields = []
+                required_interview_fields = ['date', 'time']
+                
+                # Check for required fields (date and time)
+                for field in required_interview_fields:
+                    if extracted_fields.get(field):
+                        template_variables[field] = extracted_fields[field]
+                    else:
+                        missing_fields.append(field)
+                
+                # Position: use extracted or database default
+                if extracted_fields.get('position'):
+                    template_variables['position'] = extracted_fields['position']
+                elif candidate_info.get('applied_position'):
+                    template_variables['position'] = candidate_info['applied_position']
+                else:
+                    template_variables['position'] = 'the advertised position'
+                
+                # Format: default to "in-person" if not specified
+                if extracted_fields.get('format'):
+                    # Normalize format values
+                    format_value = extracted_fields['format'].lower()
+                    if format_value in ['zoom', 'online', 'virtual', 'teams', 'meet', 'video call']:
+                        template_variables['format'] = 'online'
+                    elif format_value in ['in-person', 'physical', 'office', 'on-site', 'face-to-face']:
+                        template_variables['format'] = 'in-person'
+                    else:
+                        template_variables['format'] = extracted_fields['format']
+                else:
+                    template_variables['format'] = 'in-person'  # Default
+                
+                # Duration: default to "1 hour" if not specified
+                if extracted_fields.get('duration'):
+                    # Normalize duration values
+                    duration_value = extracted_fields['duration'].lower()
+                    # Handle various formats like "45 minutes", "1 hour", "30 mins", "1.5 hours"
+                    if 'hour' in duration_value or 'hr' in duration_value:
+                        template_variables['duration'] = extracted_fields['duration']
+                    elif 'minute' in duration_value or 'min' in duration_value:
+                        template_variables['duration'] = extracted_fields['duration']
+                    else:
+                        # If just a number, assume minutes
+                        try:
+                            num = int(extracted_fields['duration'])
+                            if num < 5:  # Probably hours
+                                template_variables['duration'] = f"{num} hour{'s' if num > 1 else ''}"
+                            else:  # Probably minutes
+                                template_variables['duration'] = f"{num} minutes"
+                        except ValueError:
+                            template_variables['duration'] = extracted_fields['duration']
+                else:
+                    template_variables['duration'] = '1 hour'  # Default
+                
+                # Check if we have all required fields
+                if missing_fields:
+                    return {
+                        'success': False,
+                        'error': f'Missing required fields for interview invitation: {", ".join(missing_fields)}. Please specify: {", ".join(missing_fields)} in your message.'
+                    }
+                
+                # Format the date and time nicely if possible
+                # try:
+                #     # Try to parse and format the date
+                #     if extracted_fields.get('date'):
+                #         parsed_date = parser.parse(extracted_fields['date'], fuzzy=True)
+                #         template_variables['date'] = parsed_date.strftime('%B %d, %Y')  # e.g., "January 15, 2025"
+                # except Exception as e:
+                #     # Keep original format if parsing fails
+                #     print(f"Could not parse date '{extracted_fields.get('date')}': {e}")
+                #     template_variables['date'] = extracted_fields.get('date', '')
+                
+                # Format the date and time nicely if possible
+                try:
+                    # Try to parse and format the date
+                    if extracted_fields.get('date'):
+                        date_text = extracted_fields['date'].lower().strip()
+                        
+                        # Handle "tomorrow" case
+                        if date_text == 'tomorrow':
+                            from datetime import datetime, timedelta
+                            
+                            tomorrow = datetime.now() + timedelta(days=1)
+                            template_variables['date'] = tomorrow.strftime('%B %d, %Y')
+                            
+                        # Handle "today" case
+                        elif date_text == 'today':
+                            from datetime import datetime
+                            
+                            today = datetime.now()
+                            template_variables['date'] = today.strftime('%B %d, %Y')
+                            
+                        # Handle "next [day]" cases manually
+                        elif date_text.startswith('next '):
+                            from datetime import datetime, timedelta
+                            import calendar
+                            
+                            day_name = date_text.replace('next ', '').strip()
+                            weekdays = {
+                                'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+                                'friday': 4, 'saturday': 5, 'sunday': 6
+                            }
+                            
+                            if day_name in weekdays:
+                                today = datetime.now()
+                                target_weekday = weekdays[day_name]
+                                current_weekday = today.weekday()
+                                
+                                # For "next [day]", we ALWAYS want the next week's occurrence
+                                days_ahead = target_weekday - current_weekday
+                                if days_ahead <= 0:  # Target day already happened this week or is today
+                                    days_ahead += 7  # Go to next week
+                                else:
+                                    days_ahead += 7  # Still go to next week even if it hasn't happened yet
+                                
+                                target_date = today + timedelta(days=days_ahead)
+                                template_variables['date'] = target_date.strftime('%B %d, %Y')
+                            else:
+                                # Fall back to original parsing
+                                parsed_date = parser.parse(extracted_fields['date'], fuzzy=True)
+                                template_variables['date'] = parsed_date.strftime('%B %d, %Y')
+                                
+                        # Handle "this [day]" cases
+                        elif date_text.startswith('this '):
+                            from datetime import datetime, timedelta
+                            
+                            day_name = date_text.replace('this ', '').strip()
+                            weekdays = {
+                                'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+                                'friday': 4, 'saturday': 5, 'sunday': 6
+                            }
+                            
+                            if day_name in weekdays:
+                                today = datetime.now()
+                                target_weekday = weekdays[day_name]
+                                current_weekday = today.weekday()
+                                
+                                # For "this [day]", we want this week's occurrence if it hasn't passed
+                                days_ahead = target_weekday - current_weekday
+                                if days_ahead < 0:  # Target day already happened this week
+                                    days_ahead += 7  # Go to next week
+                                # If days_ahead == 0, it's today
+                                # If days_ahead > 0, it's later this week
+                                
+                                target_date = today + timedelta(days=days_ahead)
+                                template_variables['date'] = target_date.strftime('%B %d, %Y')
+                            else:
+                                # Fall back to original parsing
+                                parsed_date = parser.parse(extracted_fields['date'], fuzzy=True)
+                                template_variables['date'] = parsed_date.strftime('%B %d, %Y')
+                                
+                        else:
+                            # Use dateutil parser for other formats (like "January 15", "15th", etc.)
+                            parsed_date = parser.parse(extracted_fields['date'], fuzzy=True)
+                            template_variables['date'] = parsed_date.strftime('%B %d, %Y')
+                            
+                except Exception as e:
+                    # Keep original format if parsing fails
+                    print(f"Could not parse date '{extracted_fields.get('date')}': {e}")
+                    template_variables['date'] = extracted_fields.get('date', '')
+
             
             # Render the email template
             subject = self.render_template(template['subject'], template_variables)

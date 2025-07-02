@@ -791,11 +791,11 @@ with st.expander("💡 Example questions you can ask"):
     - "Email offer to mike for SIP program, salary 1800, start May 12th"
     
     **Interview Invitations:**
-    - "Invite Sarah for interview tomorrow at 2pm via Zoom, 45 minutes"
-    - "Send interview email to Mike for January 20th at 10am, in-person, 1 hour"
+    - "Invite Sarah for interview tomorrow at 2pm via Zoom, 45 minutes, AI software developer"
+    - "Send interview email to Mike for January 20th at 10am, in-person"
     - "Schedule interview with Lisa next Monday 3pm, online meeting, 30 minutes"
     
     **Job Rejection emails:**
     - "Send rejection letter to Alice"
-    - "Reject Bob via email"
+    - "Reject Bob via email for data analyst position"
     """)
