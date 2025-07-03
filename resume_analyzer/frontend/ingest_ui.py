@@ -27,7 +27,7 @@ from resume_analyzer.backend.helpers import chat_with_resumes, fetch_candidate_k
 from resume_analyzer.ingestion.ingest_normal import ingest_resume_normal
 from resume_analyzer.ingestion.ingest_pg import extract_fields_with_qwen, qwen_client
 from resume_analyzer.ingestion.helpers import convert_docx_to_pdf_via_libreoffice, initialize_database
-from resume_analyzer.frontend.helpers import render_deletion_tab, render_overview_dashboard, get_quick_stats, render_skills_management_tab, render_score_table, render_delete_all_resumes
+from resume_analyzer.frontend.helpers import render_deletion_tab, render_overview_dashboard, get_quick_stats, render_skills_management_tab, render_score_table, render_delete_all_resumes, render_job_description_main_content
 from resume_analyzer.backend.email_service import EmailService
 from resume_analyzer.frontend.email_ui_helpers import process_user_input
 from pdf2image import convert_from_path
@@ -36,12 +36,29 @@ import json
 
 email_service = EmailService()
 
-try:
-    initialize_database()
-    print("✅ Database initialized successfully")
-except Exception as e:
-    print(f"❌ Error initializing database: {e}")
+# # Add a session state check to prevent multiple initializations
+def initialize_database_once():
+    """Initialize database only once per session"""
+    if 'db_initialized' not in st.session_state:
+        print("🔧 Initializing database...")
+        
+        try:
+            # Actually initialize the database here
+            initialize_database()  # This calls the real initialization function
+            
+            print("✅ Database initialized successfully")
+            st.session_state.db_initialized = True
+            return True
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            st.session_state.db_initialized = False
+            return False
+    else:
+        print("🔄 Database already initialized (skipping)")
+        return True
 
+# Call this instead of direct initialization
+initialize_database_once()
 
 # Initialize session state for pending emails
 if 'pending_email' not in st.session_state:
@@ -234,6 +251,18 @@ elif mode == "📥 Ingestion":
 
     else:
         status_placeholder.info("Click 'Run Ingestion' in the sidebar to begin.")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Skill Categories Mode
+# ──────────────────────────────────────────────────────────────────────────────
+elif mode == "📋 Skill Categories":
+    # The sidebar already handles the skills management via render_skills_management_tab()
+    # Now we render the main content area for job description processing
+    
+    print("🎯" * 50)
+    print("SKILL CATEGORIES MODE SELECTED!")
+    print("🎯" * 50)
+    render_job_description_main_content()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Manual Add Mode
@@ -765,37 +794,37 @@ elif mode == "🔍 Filter Records":
 
 
         
-       # Show helpful examples
-with st.expander("💡 Example questions you can ask"):
-    st.markdown("""
-    **Skill-based queries:**
-    - "Find candidates with Python and machine learning experience"
-    - "Who has React and Node.js skills?"
-    - "Which candidates know cloud computing?"
-    
-    **Candidate-specific queries:**
-    - "What's Leon's educational background?"
-    - "Tell me about Xiang's work experience"
-    - "What projects has DIAN worked on?"
-    
-    **Email commands:**
-    
-    **Job Offers:**
-    - "Send offer email to mingyang for software engineer position, starting January 15th, salary $2000/month, 6 months"
-    - "Email offer to john for data analyst role, beginning February 1st, salary 2500, 4 months"
-    - "Offer alice the UI/UX designer position, start Monday, $1800/month, 3 months"
-    - "Send offer to bob for summer internship, starting June 1st, salary $1500/month"
-    
-    ***Special Program Offers (ATAP & SIP):***
-    - "Send offer to lisa for ATAP program, starting March 1st, salary $2500/month"
-    - "Email offer to mike for SIP program, salary 1800, start May 12th"
-    
-    **Interview Invitations:**
-    - "Invite Sarah for interview tomorrow at 2pm via Zoom, 45 minutes, AI software developer"
-    - "Send interview email to Mike for January 20th at 10am, in-person"
-    - "Schedule interview with Lisa next Monday 3pm, online meeting, 30 minutes"
-    
-    **Job Rejection emails:**
-    - "Send rejection letter to Alice"
-    - "Reject Bob via email for data analyst position"
-    """)
+        # Show helpful examples
+        with st.expander("💡 Example questions you can ask"):
+            st.markdown("""
+            **Skill-based queries:**
+            - "Find candidates with Python and machine learning experience"
+            - "Who has React and Node.js skills?"
+            - "Which candidates know cloud computing?"
+            
+            **Candidate-specific queries:**
+            - "What's Leon's educational background?"
+            - "Tell me about Xiang's work experience"
+            - "What projects has DIAN worked on?"
+            
+            **Email commands:**
+            
+            **Job Offers:**
+            - "Send offer email to mingyang for software engineer position, starting January 15th, salary $2000/month, 6 months"
+            - "Email offer to john for data analyst role, beginning February 1st, salary 2500, 4 months"
+            - "Offer alice the UI/UX designer position, start Monday, $1800/month, 3 months"
+            - "Send offer to bob for summer internship, starting June 1st, salary $1500/month"
+            
+            ***Special Program Offers (ATAP & SIP):***
+            - "Send offer to lisa for ATAP program, starting March 1st, salary $2500/month"
+            - "Email offer to mike for SIP program, salary 1800, start May 12th"
+            
+            **Interview Invitations:**
+            - "Invite Sarah for interview tomorrow at 2pm via Zoom, 45 minutes, AI software developer"
+            - "Send interview email to Mike for January 20th at 10am, in-person"
+            - "Schedule interview with Lisa next Monday 3pm, online meeting, 30 minutes"
+            
+            **Job Rejection emails:**
+            - "Send rejection letter to Alice"
+            - "Reject Bob via email for data analyst position"
+            """)
