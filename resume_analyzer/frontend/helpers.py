@@ -113,6 +113,127 @@ def get_database_overview() -> Optional[Dict]:
         st.error(f"Error fetching database overview: {e}")
         return None
 
+# def render_overview_dashboard() -> None:
+#     """
+#     Render the complete overview dashboard in Streamlit.
+#     This is a comprehensive view of the entire database.
+#     """
+#     st.markdown("### 📊 Database Overview Dashboard")
+#     st.caption("Comprehensive view of your resume database statistics and insights")
+    
+#     # Fetch database stats
+#     db_overview = get_database_overview()
+    
+#     if not db_overview:
+#         st.error("❌ Unable to fetch database overview")
+#         return
+    
+#     # === TOP METRICS ROW ===
+#     col1, col2, col3, col4 = st.columns(4)
+#     with col1:
+#         st.metric("📄 Total Resumes", db_overview['total_metadata'])
+#     with col2:
+#         st.metric("🔍 Processed Resumes", db_overview['total_normal'])
+#     with col3:
+#         st.metric("👥 Unique Candidates", db_overview['unique_candidates'])
+#     with col4:
+#         sync_rate = f"{(db_overview['total_normal']/max(db_overview['total_metadata'], 1)*100):.1f}%"
+#         st.metric("🔄 Sync Rate", sync_rate)
+    
+#     st.markdown("---")
+    
+#     # === DISTRIBUTIONS AND ANALYTICS ===
+#     tab1, tab2 = st.tabs(["📊 Demographics", "🛠️ Skills & Experience"])
+    
+#     with tab1:
+#         col1, col2 = st.columns(2)
+        
+#         with col1:
+#             st.markdown("#### 🎓 University Distribution")
+#             if db_overview['top_universities']:
+#                 uni_data = {
+#                     "University": [row[0] for row in db_overview['top_universities']],
+#                     "Count": [row[1] for row in db_overview['top_universities']]
+#                 }
+#                 st.dataframe(uni_data, hide_index=True, use_container_width=True)
+#             else:
+#                 st.info("No university data available")
+            
+#             st.markdown("#### 🌍 Citizenship Distribution")
+#             if db_overview['citizenship_distribution']:
+#                 citizen_data = {
+#                     "Citizenship": [row[0] for row in db_overview['citizenship_distribution']],
+#                     "Count": [row[1] for row in db_overview['citizenship_distribution']]
+#                 }
+#                 st.dataframe(citizen_data, hide_index=True, use_container_width=True)
+                
+#                 # Show as pie chart
+#                 st.bar_chart(dict(db_overview['citizenship_distribution']))
+#             else:
+#                 st.info("No citizenship data available")
+        
+#         with col2:
+#             st.markdown("#### 👔 Employment Type Distribution")
+#             if db_overview['employment_distribution']:
+#                 emp_data = {
+#                     "Type": [row[0] for row in db_overview['employment_distribution']],
+#                     "Count": [row[1] for row in db_overview['employment_distribution']]
+#                 }
+#                 st.dataframe(emp_data, hide_index=True, use_container_width=True)
+                
+#                 # Show as bar chart
+#                 st.bar_chart(dict(db_overview['employment_distribution']))
+#             else:
+#                 st.info("No employment type data available")
+            
+#             st.markdown("#### 💰 Salary Distribution")
+#             if db_overview['salary_distribution']:
+#                 salary_data = {
+#                     "Range": [row[0] for row in db_overview['salary_distribution']],
+#                     "Count": [row[1] for row in db_overview['salary_distribution']]
+#                 }
+#                 st.dataframe(salary_data, hide_index=True, use_container_width=True)
+#             else:
+#                 st.info("No salary data available")
+    
+#     with tab2:
+#         col1, col2 = st.columns([2, 1])
+        
+#         with col1:
+#             st.markdown("#### 🛠️ Top Skills")
+#             if db_overview['top_skills']:
+#                 skills_data = {
+#                     "Skill": [row[0] for row in db_overview['top_skills']],
+#                     "Candidates": [row[1] for row in db_overview['top_skills']]
+#                 }
+#                 st.dataframe(skills_data, hide_index=True, use_container_width=True, height=400)
+                
+#                 # Show as horizontal bar chart
+#                 skills_dict = {row[0]: row[1] for row in db_overview['top_skills']}
+#                 st.bar_chart(skills_dict)
+#             else:
+#                 st.info("No skills data available")
+        
+#         with col2:
+#             st.markdown("#### 📈 Quick Stats")
+            
+#             # Additional calculated metrics
+#             if db_overview['total_metadata'] > 0:
+#                 avg_resumes_per_candidate = db_overview['total_metadata'] / db_overview['unique_candidates']
+#                 st.metric("📊 Avg Resumes/Candidate", f"{avg_resumes_per_candidate:.1f}")
+            
+#             if db_overview['top_skills']:
+#                 total_skill_mentions = sum(row[1] for row in db_overview['top_skills'])
+#                 st.metric("🎯 Top 10 Skills Total", total_skill_mentions)
+                
+#                 most_popular_skill = db_overview['top_skills'][0]
+#                 st.metric("🥇 Most Popular Skill", f"{most_popular_skill[0]} ({most_popular_skill[1]})")
+            
+#             # Data quality indicators
+#             processing_completeness = f"{sync_rate}"
+#             st.metric("✅ Processing Complete", processing_completeness)
+    
+    
 def render_overview_dashboard() -> None:
     """
     Render the complete overview dashboard in Streamlit.
@@ -125,7 +246,7 @@ def render_overview_dashboard() -> None:
     db_overview = get_database_overview()
     
     if not db_overview:
-        st.error("❌ Unable to fetch database overview")
+        print("❌ Unable to fetch database overview")
         return
     
     # === TOP METRICS ROW ===
@@ -143,7 +264,7 @@ def render_overview_dashboard() -> None:
     st.markdown("---")
     
     # === DISTRIBUTIONS AND ANALYTICS ===
-    tab1, tab2 = st.tabs(["📊 Demographics", "🛠️ Skills & Experience"])
+    tab1, tab2, tab3 = st.tabs(["📊 Demographics", "🛠️ Skills & Experience", "💬 Chat with All Candidates"])
     
     with tab1:
         col1, col2 = st.columns(2)
@@ -233,7 +354,140 @@ def render_overview_dashboard() -> None:
             processing_completeness = f"{sync_rate}"
             st.metric("✅ Processing Complete", processing_completeness)
     
+    with tab3:
+        # NEW CHAT INTERFACE FOR ALL CANDIDATES
+        render_overview_chat_interface()
+    
+    st.markdown("---")
+        
+def render_overview_chat_interface():
+    """
+    Render a chat interface for talking to all candidates in the database.
+    """
+    print("💬" * 30)
+    print("render_overview_chat_interface() CALLED!")
+    print("💬" * 30)
+    
+    st.markdown("#### 💬 Chat with All Candidates")
+    st.caption("Ask questions about any candidate or send emails directly from here")
+    
+    # Get all candidate keys and filenames from database
+    try:
+        env = load_env_vars()
+        conn = connect_postgres(env)
+        cur = conn.cursor()
+        
+        # Get all candidates and their files
+        cur.execute("""
+            SELECT DISTINCT rm.filename, rm.candidate_key
+            FROM public.resumes_metadata rm
+            WHERE rm.candidate_key IS NOT NULL
+            ORDER BY rm.candidate_key, rm.filename;
+        """)
+        all_records = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        if not all_records:
+            st.info("📭 No candidates found in the database.")
+            return
+        
+        # Extract all filenames and candidate keys
+        all_filenames = [record[0] for record in all_records]
+        all_candidate_keys = list(set([record[1] for record in all_records]))
+        
+        print(f"💬 Found {len(all_candidate_keys)} candidates with {len(all_filenames)} total files")
+        
+        # Show summary
+        st.info(f"💬 Ready to chat about **{len(all_candidate_keys)} candidates** with **{len(all_filenames)} total files**")
+        
+        # Initialize session state - use a unique key for overview chat
+        chat_key = "overview_chat_all_candidates"
+        if chat_key not in st.session_state:
+            st.session_state[chat_key] = []
 
+        # STEP 1: Display chat history FIRST
+        for msg in st.session_state[chat_key]:
+            st.chat_message(msg["role"]).write(msg["content"])
+
+        
+
+        # STEP 3: Process input when received (BEFORE creating input box)
+        # Move the user_input definition to the very end
+        
+        # Initialize user_input from session state to handle processing
+        if 'pending_overview_input' in st.session_state:
+            user_input = st.session_state['pending_overview_input']
+            del st.session_state['pending_overview_input']
+            
+            print(f"💬 User input received: {user_input}")
+            
+            # Add user message to history
+            st.session_state[chat_key].append({"role": "user", "content": user_input})
+            st.chat_message("user").write(user_input)
+            
+            # Import email service here to avoid circular imports
+            from ..backend.email_service import EmailService
+            from .email_ui_helpers import process_user_input
+            
+            email_service = EmailService()
+            
+            # Process the user input using the same helper function
+            reply = process_user_input(user_input, all_filenames, all_candidate_keys, email_service)
+            
+            print(f"💬 AI reply: {reply[:100]}...")
+            
+            # Add assistant response to history and display
+            st.session_state[chat_key].append({"role": "assistant", "content": reply})
+            st.chat_message("assistant").write(reply)
+
+        # STEP 4: User input box AT THE VERY BOTTOM
+        user_input = st.chat_input("Ask me anything about these candidates...", key="overview_input")
+        
+        # If user entered something, store it for next run
+        if user_input:
+            st.session_state['pending_overview_input'] = user_input
+            st.rerun()
+            
+        # STEP 2: Show helpful examples AFTER chat history
+        with st.expander("💡 Example questions you can ask"):
+            st.markdown("""
+            **Skill-based queries:**
+            - "Find candidates with Python and machine learning experience"
+            - "Who has React and Node.js skills?"
+            - "Which candidates know cloud computing?"
+            
+            **Candidate-specific queries:**
+            - "What's Leon's educational background?"
+            - "Tell me about Xiang's work experience"
+            - "What projects has DIAN worked on?"
+            
+            **Email commands:**
+            
+            **Job Offers:**
+            - "Send offer email to mingyang for software engineer position, starting January 15th, salary $2000/month, 6 months"
+            - "Email offer to john for data analyst role, beginning February 1st, salary 2500, 4 months"
+            - "Offer alice the UI/UX designer position, start Monday, $1800/month, 3 months"
+            - "Send offer to bob for summer internship, starting June 1st, salary $1500/month"
+            
+            ***Special Program Offers (ATAP & SIP):***
+            - "Send offer to lisa for ATAP program, starting March 1st, salary $2500/month"
+            - "Email offer to mike for SIP program, salary 1800, start May 12th"
+            
+            **Interview Invitations:**
+            - "Invite Sarah for interview tomorrow at 2pm via Zoom, 45 minutes, AI software developer"
+            - "Send interview email to Mike for January 20th at 10am, in-person"
+            - "Schedule interview with Lisa next Monday 3pm, online meeting, 30 minutes"
+            
+            **Job Rejection emails:**
+            - "Send rejection letter to Alice"
+            - "Reject Bob via email for data analyst position"
+            """)
+    
+    except Exception as e:
+        print(f"💬 Error in overview chat interface: {e}")
+        
 def get_quick_stats() -> Optional[Dict[str, int]]:
     """
     Get quick database statistics for use in other parts of the application.
