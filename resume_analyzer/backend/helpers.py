@@ -617,6 +617,54 @@ def judge_candidates_by_summary(
     
     return reranked_results
 
+# def _handle_skill_matching_query(user_query: str, candidate_keys: List[str], context_limit: int) -> Dict[str, any]:
+#     """
+#     Handle queries about finding candidates with specific skills
+#     """
+#     # Extract skills from the query
+#     skills = extract_skills_from_query(qwen, user_query)
+    
+#     if not skills:
+#         return {
+#             "answer": "I couldn't identify any specific technical skills in your query. Could you be more specific about the technologies or skills you're looking for?",
+#             "query_type": "skill_matching",
+#             "candidates_analyzed": [],
+#             "skills_extracted": [],
+#             "additional_info": {"suggestion": "Try mentioning specific technologies like 'Python', 'React', 'AWS', etc."}
+#         }
+    
+#     # Analyze candidates
+#     results = judge_candidates_by_summary(candidate_keys, skills)
+    
+#     # Sort by score and take top matches
+#     sorted_results = sorted(
+#         results.items(), 
+#         key=lambda x: x[1].get("rank_position", 999)  # Sort by rank (1 = best)
+#     )[:context_limit]
+
+#     answer_parts = [f"Based on your query about {', '.join(skills)}, here are the candidates ranked by suitability:\n"]
+        
+#     for filename, analysis in sorted_results:
+#         rank = analysis.get("rank_position", "?")
+#         reasoning = analysis.get("ranking_reasoning", analysis.get("reasoning", "No reasoning provided"))
+        
+#         answer_parts.append(f"**#{rank}. {filename}**")
+#         answer_parts.append(f"   {reasoning}\n")
+    
+#     answer = "\n".join(answer_parts)
+
+#     return {
+#         "answer": answer,
+#         "query_type": "skill_matching",
+#         "candidates_analyzed": [item[0] for item in sorted_results],
+#         "skills_extracted": skills,
+#         "additional_info": {
+#             "total_candidates_checked": len(results),
+#             "top_matches": len(sorted_results),
+#             "ranking_method": "comparative_suitability"
+#         }
+#     }
+
 def _handle_skill_matching_query(user_query: str, candidate_keys: List[str], context_limit: int) -> Dict[str, any]:
     """
     Handle queries about finding candidates with specific skills
@@ -642,21 +690,46 @@ def _handle_skill_matching_query(user_query: str, candidate_keys: List[str], con
         key=lambda x: x[1].get("rank_position", 999)  # Sort by rank (1 = best)
     )[:context_limit]
 
+    # NEW: Create filename to candidate_key mapping
+    filename_to_candidate = {}
+    env = load_env_vars()
+    conn = connect_postgres(env)
+    cur = conn.cursor()
+    
+    # Get candidate names for the analyzed files
+    analyzed_filenames = [item[0] for item in sorted_results]
+    if analyzed_filenames:
+        cur.execute("""
+            SELECT filename, candidate_key 
+            FROM public.resumes_normal 
+            WHERE filename = ANY(%s)
+        """, (analyzed_filenames,))
+        filename_to_candidate = dict(cur.fetchall())
+    
+    cur.close()
+    conn.close()
+
     answer_parts = [f"Based on your query about {', '.join(skills)}, here are the candidates ranked by suitability:\n"]
         
     for filename, analysis in sorted_results:
         rank = analysis.get("rank_position", "?")
         reasoning = analysis.get("ranking_reasoning", analysis.get("reasoning", "No reasoning provided"))
         
-        answer_parts.append(f"**#{rank}. {filename}**")
+        # Use candidate name instead of filename
+        candidate_name = filename_to_candidate.get(filename, filename)
+        
+        answer_parts.append(f"**#{rank}. {candidate_name}**")
         answer_parts.append(f"   {reasoning}\n")
     
     answer = "\n".join(answer_parts)
 
+    # Return candidate names instead of filenames
+    analyzed_candidates = [filename_to_candidate.get(filename, filename) for filename in analyzed_filenames]
+
     return {
         "answer": answer,
         "query_type": "skill_matching",
-        "candidates_analyzed": [item[0] for item in sorted_results],
+        "candidates_analyzed": analyzed_candidates,  # Now contains candidate names
         "skills_extracted": skills,
         "additional_info": {
             "total_candidates_checked": len(results),

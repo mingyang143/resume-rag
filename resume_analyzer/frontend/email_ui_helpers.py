@@ -72,6 +72,23 @@ def _generate_pending_email_reminder(user_input: str) -> str:
     
     return reply
 
+# def handle_email_request(user_input: str, matched_files: List[str], email_service: EmailService) -> Optional[str]:
+#     """
+#     Handle new email requests and show preview.
+    
+#     Returns:
+#         Optional[str]: Reply message if this was an email request, None otherwise
+#     """
+#     # Get current candidate keys
+#     filename_to_candidate = fetch_candidate_keys(matched_files)
+#     current_candidate_keys = list(set(filename_to_candidate.values()))
+    
+#     print("----------------------------------------------------")
+#     print(f"📧 Checking email intent for: {user_input}")
+#     print("----------------------------------------------------")
+    
+#     email_intent = detect_email_intent(user_input, current_candidate_keys)
+    
 def handle_email_request(user_input: str, matched_files: List[str], email_service: EmailService) -> Optional[str]:
     """
     Handle new email requests and show preview.
@@ -79,12 +96,12 @@ def handle_email_request(user_input: str, matched_files: List[str], email_servic
     Returns:
         Optional[str]: Reply message if this was an email request, None otherwise
     """
-    # Get current candidate keys
-    filename_to_candidate = fetch_candidate_keys(matched_files)
-    current_candidate_keys = list(set(filename_to_candidate.values()))
+    # matched_files now contains candidate names instead of filenames
+    current_candidate_keys = matched_files  # These are already candidate names
     
     print("----------------------------------------------------")
     print(f"📧 Checking email intent for: {user_input}")
+    print(f"📧 Available candidates: {current_candidate_keys}")
     print("----------------------------------------------------")
     
     email_intent = detect_email_intent(user_input, current_candidate_keys)
@@ -176,6 +193,44 @@ def process_user_input(user_input: str, matched_files: List[str], candidate_keys
     return _handle_regular_chat(user_input, candidate_keys)
 
 
+# def _handle_regular_chat(user_input: str, candidate_keys: List[str]) -> str:
+#     """Handle regular chat queries."""
+#     from ..backend.helpers import chat_with_resumes
+    
+#     with st.spinner("🤔 Analyzing your question..."):
+#         try:
+#             result = chat_with_resumes(
+#                 user_query=user_input,
+#                 candidate_keys=candidate_keys,
+#                 context_limit=3
+#             )
+            
+#             reply = result["answer"]
+#             query_type = result["query_type"]
+#             skills_extracted = result.get("skills_extracted", [])
+#             candidates_analyzed = result.get("candidates_analyzed", [])
+            
+#             # Add metadata to the response for transparency
+#             if query_type == "skill_matching" and skills_extracted:
+#                 reply += f"\n\n*🔍 Skills identified: {', '.join(skills_extracted)}*"
+            
+#             if candidates_analyzed:
+#                 reply += f"\n\n*👥 Candidates analyzed: {', '.join(candidates_analyzed)}*"
+            
+#             print("----------------------------------------------------")
+#             print(f"Chat response - Query type: {query_type}")
+#             print(f"Skills extracted: {skills_extracted}")
+#             print(f"Candidates analyzed: {candidates_analyzed}")
+#             print("----------------------------------------------------")
+            
+#             return reply
+            
+#         except Exception as e:
+#             print("----------------------------------------------------")
+#             print(f"Chat error: {e}")
+#             print("----------------------------------------------------")
+#             return f"❌ I encountered an error while processing your question: {str(e)}"
+
 def _handle_regular_chat(user_input: str, candidate_keys: List[str]) -> str:
     """Handle regular chat queries."""
     from ..backend.helpers import chat_with_resumes
@@ -197,6 +252,7 @@ def _handle_regular_chat(user_input: str, candidate_keys: List[str]) -> str:
             if query_type == "skill_matching" and skills_extracted:
                 reply += f"\n\n*🔍 Skills identified: {', '.join(skills_extracted)}*"
             
+            # Display candidate names instead of filenames
             if candidates_analyzed:
                 reply += f"\n\n*👥 Candidates analyzed: {', '.join(candidates_analyzed)}*"
             

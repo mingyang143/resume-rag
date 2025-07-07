@@ -1195,6 +1195,52 @@ def render_skills_management_tab() -> None:
 #         st.download_button("⬇️ Download CSV", csv, "category_scores.csv", "text/csv")
         
 
+# def render_score_table() -> None:
+#     """
+#     Render the skill category scores for each resume with search and filters.
+#     """
+#     st.markdown("### 📈 Candidate Skill Category Scores")
+
+#     # —– Fetch data from Postgres —–
+#     env  = load_env_vars()
+#     conn = connect_postgres(env)
+#     cur  = conn.cursor()
+#     cur.execute("""
+#         SELECT 
+#           s.candidate_key || ' / ' || s.filename AS resume_id,
+#           s.candidate_key,
+#           c.name AS category,
+#           s.score
+#         FROM resume_category_score s
+#         JOIN skill_category c ON c.id = s.category_id
+#     """)
+#     rows = cur.fetchall()
+#     cur.close()
+#     conn.close()
+
+#     if not rows:
+#         st.info("No category scores yet.")
+#         return
+
+#     # 1) Build the pivot table
+#     df = pd.DataFrame(rows, columns=["resume_id", "candidate_key", "category", "score"])
+#     pivot = (
+#         df.pivot(index="resume_id", columns="category", values="score")
+#           .fillna(0)
+#           .astype(int)
+#     )
+    
+#     # Add candidate_key column for filtering
+#     candidate_mapping = df.drop_duplicates('resume_id').set_index('resume_id')['candidate_key']
+#     pivot['candidate_key'] = candidate_mapping
+    
+#     # 2) Add average score column
+#     skill_columns = [col for col in pivot.columns if col != 'candidate_key']
+#     pivot["Average Score"] = pivot[skill_columns].mean(axis=1).round(2)
+    
+#     # 3) Reorder columns: candidate_key, Average Score, then skills (no duplicates)
+#     other_skills = [col for col in skill_columns if col != 'Average Score']  
+#     pivot = pivot[['candidate_key', 'Average Score'] + other_skills]
 def render_score_table() -> None:
     """
     Render the skill category scores for each resume with search and filters.
@@ -1207,7 +1253,7 @@ def render_score_table() -> None:
     cur  = conn.cursor()
     cur.execute("""
         SELECT 
-          s.candidate_key || ' / ' || s.filename AS resume_id,
+          s.candidate_key AS candidate_name,
           s.candidate_key,
           c.name AS category,
           s.score
@@ -1222,23 +1268,23 @@ def render_score_table() -> None:
         st.info("No category scores yet.")
         return
 
-    # 1) Build the pivot table
-    df = pd.DataFrame(rows, columns=["resume_id", "candidate_key", "category", "score"])
+    # 1) Build the pivot table using candidate names
+    df = pd.DataFrame(rows, columns=["candidate_name", "candidate_key", "category", "score"])
     pivot = (
-        df.pivot(index="resume_id", columns="category", values="score")
+        df.pivot(index="candidate_name", columns="category", values="score")
           .fillna(0)
           .astype(int)
     )
     
     # Add candidate_key column for filtering
-    candidate_mapping = df.drop_duplicates('resume_id').set_index('resume_id')['candidate_key']
+    candidate_mapping = df.drop_duplicates('candidate_name').set_index('candidate_name')['candidate_key']
     pivot['candidate_key'] = candidate_mapping
     
     # 2) Add average score column
     skill_columns = [col for col in pivot.columns if col != 'candidate_key']
     pivot["Average Score"] = pivot[skill_columns].mean(axis=1).round(2)
     
-    # 3) Reorder columns: candidate_key, Average Score, then skills (no duplicates)
+    # 3) Reorder columns: candidate_key, Average Score, then skills
     other_skills = [col for col in skill_columns if col != 'Average Score']  
     pivot = pivot[['candidate_key', 'Average Score'] + other_skills]
     

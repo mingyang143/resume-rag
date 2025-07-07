@@ -622,7 +622,7 @@ elif mode == "🔍 Filter Records":
 
         # Step 3: Add a fixed Salary Range dropdown
         salary_ranges = [
-            "ANY",         # means “no numeric restriction; include all rows (even 'any')”
+            "ANY",         # means "no numeric restriction; include all rows (even 'any')"
             "800-1000",
             "1000-1200",
             "1200-1400",
@@ -634,31 +634,24 @@ elif mode == "🔍 Filter Records":
             clauses = []
             params = []
 
-            base_query = """
-                SELECT DISTINCT rm.filename 
-                FROM public.resumes_metadata rm
-                JOIN public.resumes_normal rn ON rm.candidate_key = rn.candidate_key
-                WHERE 1=1
-            """
-
-            # non‐salary filters (same as before)
+            # Build filter clauses based on selections
             if sel_wd:
-                clauses.append("work_duration_category = ANY(%s)")
+                clauses.append("rm.work_duration_category = ANY(%s)")
                 params.append(sel_wd)
             if sel_uni:
-                clauses.append("university = ANY(%s)")
+                clauses.append("rm.university = ANY(%s)")
                 params.append(sel_uni)
             if sel_applied:
-                clauses.append("applied_position = ANY(%s)")
+                clauses.append("rm.applied_position = ANY(%s)")
                 params.append(sel_applied)
             if sel_part:
-                clauses.append("part_or_full = ANY(%s)")
+                clauses.append("rm.part_or_full = ANY(%s)")
                 params.append(sel_part)
             if sel_credit:
-                clauses.append("is_credit_bearing = ANY(%s)")
+                clauses.append("rm.is_credit_bearing = ANY(%s)")
                 params.append(sel_credit)
             if sel_citizen:
-                clauses.append("citizenship = ANY(%s)")
+                clauses.append("rm.citizenship = ANY(%s)")
                 params.append(sel_citizen)
             if sel_skills:
                 # Check if ANY of the selected skills are in the skills_categories array
@@ -670,55 +663,42 @@ elif mode == "🔍 Filter Records":
                 if skills_conditions:
                     clauses.append("(" + " OR ".join(skills_conditions) + ")")
 
-
-            # Salary filter (add rm. prefix)
+            # Salary filter
             if sel_salary != "ANY":
                 low_str, high_str = sel_salary.split("-")
                 low, high = int(low_str), int(high_str)
                 clauses.append(
                     "(rm.salary = 'any' OR (rm.salary ~ '^[0-9]+$' AND CAST(rm.salary AS INTEGER) BETWEEN %s AND %s))"
-                )  # ← Added rm. prefix
+                )
                 params.extend([low, high])
 
-            # where_clause = " AND ".join(clauses) if clauses else "TRUE"
-            # query = f"""
-            #     SELECT filename 
-            #     FROM public.resumes_metadata 
-            #     WHERE {where_clause}
-            #     ORDER BY filename;
-            # """
-
+            # Build the WHERE clause
             if clauses:
                 where_clause = " AND " + " AND ".join(clauses)
             else:
                 where_clause = ""
             
-            query = base_query + where_clause + " ORDER BY rm.filename;"
-
+            # Build the complete query to get candidate names
+            query = f"""
+                SELECT DISTINCT rm.candidate_key
+                FROM public.resumes_metadata rm
+                JOIN public.resumes_normal rn ON rm.candidate_key = rn.candidate_key
+                WHERE 1=1{where_clause}
+                ORDER BY rm.candidate_key;
+            """
+            
             try:
                 cur.execute(query, tuple(params))
-                matched = [row[0] for row in cur.fetchall()]
-                st.session_state.matched_files = matched
-                # if matched:
-                #     results_placeholder.success(f"Found {len(matched)} matching file(s):")
-                #     results_placeholder.table({"Filename": matched})
-                # else:
-                #     results_placeholder.info("No records matched the selected filters.")
-            except Exception as e:
-                results_placeholder.error(f"❌ Error querying Postgres: {e}")
-                cur.close()
-                conn.close()
-
-            cur.close()
-            conn.close()
-
-            results_block = results_placeholder.container()
-
-            with results_block:
-                if matched:
-                    st.success(f"Found {len(matched)} matching file(s):")
-                    st.table({"Filename": matched})
-
+                matched_candidates = [row[0] for row in cur.fetchall()]
+                
+                # Store candidate names instead of filenames
+                st.session_state.matched_files = matched_candidates
+                
+                # Update display
+                if matched_candidates:
+                    st.success(f"Found {len(matched_candidates)} matching candidates:")
+                    st.table({"Candidate Name": matched_candidates})
+                    
                     # Show summary of applied filters
                     filter_summary = []
                     if sel_wd: filter_summary.append(f"Work Duration: {', '.join(sel_wd)}")
@@ -732,33 +712,37 @@ elif mode == "🔍 Filter Records":
                     
                     if filter_summary:
                         st.info("🔍 **Applied Filters:** " + " | ".join(filter_summary))
-                                
                 else:
-                    st.info("No records matched the selected filters.")
+                    st.info("No candidates matched the selected filters.")
+                    
+            except Exception as e:
+                st.error(f"❌ Error querying database: {e}")
+                print(f"Query error: {e}")
+                print(f"Query: {query}")
+                print(f"Params: {params}")
 
+        cur.close()
+        conn.close()
 
-    # ————— expander closed here —————
-
-    # Now, **outside** the expander, render the chat interface if there are matches:
+    # Chat interface section remains the same...
     matched = st.session_state.matched_files
     print("----------------------------------------------------")
-    print(f"Matched files: {matched}")
+    print(f"Matched candidates: {matched}")
     print("----------------------------------------------------")
     if matched:
         st.markdown("---")
-        st.markdown("### 💬 Chat about these resumes")
+        st.markdown("### 💬 Chat about these candidates")
 
-        # Get candidate keys from matched filenames
+        # Get candidate keys from matched candidates (they're already candidate keys now)
         try:
-            filename_to_candidate = fetch_candidate_keys(matched)
-            candidate_keys = list(filename_to_candidate.values())
+            candidate_keys = matched  # matched already contains candidate_key values
             
             print("----------------------------------------------------")
             print(f"Retrieved candidate keys: {candidate_keys}")
             print("----------------------------------------------------")
             
             if not candidate_keys:
-                st.warning("⚠️ No candidate keys found for the matched files. Please check the database.")
+                st.warning("⚠️ No candidate keys found for the matched candidates.")
             else:
                 # Show which candidates are available for chat
                 st.info(f"💬 Ready to chat about {len(candidate_keys)} candidates: {', '.join(candidate_keys)}")
@@ -768,7 +752,7 @@ elif mode == "🔍 Filter Records":
             candidate_keys = []
 
         if candidate_keys:
-            # use a unique key per set of files
+            # use a unique key per set of candidates
             chat_key = "chat_" + "_".join(sorted(matched))  # Sort for consistent key
             if chat_key not in st.session_state:
                 st.session_state[chat_key] = []
@@ -792,8 +776,6 @@ elif mode == "🔍 Filter Records":
                 st.session_state[chat_key].append({"role":"assistant","content":reply})
                 st.chat_message("assistant").write(reply)
 
-
-        
         # Show helpful examples
         with st.expander("💡 Example questions you can ask"):
             st.markdown("""
