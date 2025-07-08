@@ -13,7 +13,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from resume_analyzer.ingestion.ingest_pg import ingest_all_resumes, load_env_vars
-from resume_analyzer.ingestion.ingest_all import ingest_all_candidates_with_progress
+from resume_analyzer.ingestion.ingest_all import ingest_all_candidates
 from resume_analyzer.ingestion.helpers import (
     connect_postgres,
     ensure_resumes_table,
@@ -75,58 +75,6 @@ def initialize_database_once():
 # Call this instead of direct initialization
 initialize_database_once()
 
-from resume_analyzer.ingestion.ingest_all import ingest_all_candidates_with_progress
-
-from resume_analyzer.backend.progress_tracker import ProgressTracker
-
-# Add this function after your existing functions:
-def render_ingestion_progress():
-    """Render current ingestion progress"""
-    st.markdown("### 📊 Active Ingestion Progress")
-    
-    try:
-        env = load_env_vars()
-        conn = connect_postgres(env)
-        tracker = ProgressTracker(conn)
-        
-        # Get all active sessions
-        active_sessions = tracker.get_all_active_sessions()
-        
-        if not active_sessions:
-            st.info("✅ No active ingestion sessions")
-            conn.close()
-            return
-        
-        for session in active_sessions:
-            with st.expander(f"📋 Session: {session['session_id'][:8]}...", expanded=True):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write(f"**Status:** {session['status']}")
-                    st.write(f"**Started:** {session['started_at'].strftime('%H:%M:%S')}")
-                    current_file = session['current_file'] or 'N/A'
-                    if len(current_file) > 50:
-                        current_file = current_file[:47] + "..."
-                    st.write(f"**Current:** {current_file}")
-                
-                with col2:
-                    progress = session['processed_files'] / session['total_files'] if session['total_files'] > 0 else 0
-                    st.progress(progress)
-                    st.write(f"**Progress:** {session['processed_files']}/{session['total_files']} files")
-                    
-                    if session['errors']:
-                        st.error(f"⚠️ {len(session['errors'])} errors occurred")
-                        with st.expander("View Errors"):
-                            for error in session['errors'][-5:]:  # Show last 5 errors
-                                st.write(f"❌ {error}")
-        
-        conn.close()
-        
-    except Exception as e:
-        st.error(f"❌ Error fetching progress: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-
 # Initialize session state for pending emails
 if 'pending_email' not in st.session_state:
     st.session_state.pending_email = None
@@ -137,51 +85,6 @@ load_dotenv()  # In case helpers need environment variables
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STREAMLIT APP
-
-# Add this test button temporarily:
-
-st.markdown("### 🧪 Debug Progress Tracker Database")
-if st.button("Test Database Connection"):
-    try:
-        env = load_env_vars()
-        conn = connect_postgres(env)
-        
-        # Test if the progress table exists
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT COUNT(*) FROM information_schema.tables 
-            WHERE table_name = 'ingestion_progress'
-        """)
-        table_exists = cur.fetchone()[0] > 0
-        
-        if table_exists:
-            st.success("✅ Progress table exists")
-            
-            # Test inserting a record
-            tracker = ProgressTracker(conn)
-            import uuid
-            test_id = str(uuid.uuid4())
-            
-            tracker.start_ingestion(test_id, 5, {"test": "debug"})
-            tracker.update_progress(test_id, 1, "Test file")
-            
-            # Test retrieving it
-            progress = tracker.get_progress(test_id)
-            st.write("Test progress:", progress)
-            
-            # Clean up
-            tracker.finish_ingestion(test_id, "COMPLETED")
-            
-        else:
-            st.error("❌ Progress table doesn't exist")
-            
-        cur.close()
-        conn.close()
-        
-    except Exception as e:
-        st.error(f"❌ Database test failed: {e}")
-        import traceback
-        st.code(traceback.format_exc())
 # ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="📥 Resume Management Dashboard",
@@ -244,13 +147,6 @@ with st.sidebar:
     )
 
     if mode == "📥 Ingestion":
-        # st.markdown("### 📂 Ingestion Settings")
-        # resumes_folder = st.text_input(
-        #     "Folder Path",
-        #     placeholder="/path/to/resumes/folder",
-        # )
-        # st.caption("Enter the absolute path to the folder containing PDF/DOCX resumes.")
-        # run_button = st.button("🔄 Run Ingestion")
         st.markdown("### 📂 Ingestion Settings")
         resumes_folder = st.text_input(
             "Folder Path",
@@ -258,33 +154,6 @@ with st.sidebar:
         )
         st.caption("Enter the absolute path to the folder containing PDF/DOCX resumes.")
         run_button = st.button("🔄 Run Ingestion")
-        
-        # ADD ONLY THIS: Quick progress display in sidebar
-        st.markdown("### 📊 Quick Progress")
-        try:
-            env = load_env_vars()
-            conn = connect_postgres(env)
-            tracker = ProgressTracker(conn)
-            
-            active_sessions = tracker.get_all_active_sessions()
-            
-            if active_sessions:
-                for session in active_sessions:
-                    progress = session['processed_files'] / session['total_files'] if session['total_files'] > 0 else 0
-                    st.progress(progress)
-                    st.caption(f"📄 {session['processed_files']}/{session['total_files']} files")
-                    
-                    current_file = session['current_file']
-                    if current_file and len(current_file) > 20:
-                        current_file = current_file[:17] + "..."
-                    st.caption(f"🔄 {current_file or 'Processing...'}")
-            else:
-                st.caption("✅ No active sessions")
-            
-            conn.close()
-            
-        except Exception as e:
-            st.caption(f"❌ Progress error: {e}")
         
     elif mode == "✏️ Manual Add":
         pass
@@ -324,11 +193,6 @@ if mode == "📊 Overview":
 # Ingestion Mode
 # ──────────────────────────────────────────────────────────────────────────────
 elif mode == "📥 Ingestion":
-    # Always show progress first
-    render_ingestion_progress()
-    
-    st.markdown("---")
-    st.markdown("### 📤 Start New Ingestion")
 
     if not resumes_folder:
         status_placeholder.info("Enter a folder path in the sidebar to begin ingestion.")
@@ -349,19 +213,18 @@ elif mode == "📥 Ingestion":
         st.metric("📂 Folder", os.path.basename(resumes_folder))
         st.metric("🗂️ Candidates", len(candidates))
     with col2:
-        if candidates:
-            st.dataframe(
-                {
-                    "Candidate folder": candidates,
-                    "Num Resumes": [
-                        len([f for f in os.listdir(os.path.join(resumes_folder, d))
-                        if f.lower().endswith((".pdf", ".docx"))
-                    ])
-                    for d in candidates
-                    ],
-                },
-                height=200,
-            )
+        st.dataframe(
+            {
+                "Candidate folder": candidates,
+                "Num Resumes": [
+                    len([f for f in os.listdir(os.path.join(resumes_folder, d))
+                    if f.lower().endswith((".pdf", ".docx"))
+                ])
+                for d in candidates
+                ],
+            },
+            height=200,
+        )
 
     st.markdown("---")
 
@@ -378,7 +241,7 @@ elif mode == "📥 Ingestion":
         else:
             # Initialize progress bar
             progress_bar = progress_placeholder.progress(0.0, text="Starting…")
-            status_placeholder.info(f"🚀 Starting background ingestion of {total_folders} folder(s)…")
+            status_placeholder.info(f"Starting ingestion of {total_folders} folder(s)…")
 
             logs: list[str] = []
 
@@ -387,122 +250,22 @@ elif mode == "📥 Ingestion":
                 fraction = idx / total
                 progress_bar.progress(fraction, text=f"Processing {filename} ({idx}/{total})")
                 logs.append(f"[{idx}/{total}] Processed: {filename}")
-                log_placeholder.text("\n".join(logs[-10:]))  # Show last 10 logs
-
-            try:
-                # Start ingestion in background with progress tracking
-                summary, session_id = ingest_all_candidates_with_progress(
-                    resumes_folder, 
-                    progress_callback,
-                    max_workers=2  # Reduce workers for better progress tracking
-                )
-                
-                # Finalize progress and status
-                progress_bar.progress(1.0, text="Completed")
-                status_placeholder.success(f"✅ Ingestion complete! Session ID: {session_id[:8]}...")
-
-                # Append summary logs
-                for line in summary:
-                    logs.append(line)
-                log_placeholder.text("\n".join(logs[-15:]))  # Show last 15 logs
-                
-                # Auto-refresh to show updated progress
-                time.sleep(2)
-                st.rerun()
-
-            except Exception as e:
-                progress_bar.progress(0.0, text="Failed")
-                status_placeholder.error(f"❌ Ingestion failed: {str(e)}")
-                logs.append(f"❌ Error: {str(e)}")
                 log_placeholder.text("\n".join(logs))
 
-    # Add auto-refresh toggle
-    st.markdown("---")
-    auto_refresh = st.checkbox(
-        "🔄 Auto-refresh progress (every 5 seconds)", 
-        value=False,
-        help="Automatically refresh to show real-time progress"
-    )
-    
-    if auto_refresh:
-        time.sleep(5)
-        st.rerun()
+            # Run ingestion
+            summary = ingest_all_candidates(resumes_folder, progress_callback)
 
-    if not run_button:
+            # Finalize progress and status
+            progress_bar.progress(1.0, text="Completed")
+            status_placeholder.success("✅ Ingestion complete!")
+
+            # Append summary logs
+            for line in summary:
+                logs.append(line)
+            log_placeholder.text("\n".join(logs))
+
+    else:
         status_placeholder.info("Click 'Run Ingestion' in the sidebar to begin.")
-
-    # if not resumes_folder:
-    #     status_placeholder.info("Enter a folder path in the sidebar to begin ingestion.")
-    #     st.stop()
-
-    # if not os.path.isdir(resumes_folder):
-    #     status_placeholder.error("❌ The provided path does not exist or is not a directory.")
-    #     st.stop()
-
-    # # Show folder summary
-    # candidates = [
-    #     d for d in os.listdir(resumes_folder)
-    #     if os.path.isdir(os.path.join(resumes_folder, d))
-    # ]
-
-    # col1, col2 = st.columns([1, 3])
-    # with col1:
-    #     st.metric("📂 Folder", os.path.basename(resumes_folder))
-    #     st.metric("🗂️ Candidates", len(candidates))
-    # with col2:
-    #     st.dataframe(
-    #         {
-    #             "Candidate folder": candidates,
-    #             "Num Resumes": [
-    #                 len([f for f in os.listdir(os.path.join(resumes_folder, d))
-    #                 if f.lower().endswith((".pdf", ".docx"))
-    #             ])
-    #             for d in candidates
-    #             ],
-    #         },
-    #         height=200,
-    #     )
-
-    # st.markdown("---")
-
-    # if run_button:
-    #     # Clear placeholders
-    #     progress_placeholder.empty()
-    #     status_placeholder.empty()
-    #     log_placeholder.empty()
-    #     results_placeholder.empty()
-
-    #     total_folders = len(candidates)
-    #     if total_folders == 0:
-    #         status_placeholder.warning("⚠️ No folders found to ingest.")
-    #     else:
-    #         # Initialize progress bar
-    #         progress_bar = progress_placeholder.progress(0.0, text="Starting…")
-    #         status_placeholder.info(f"Starting ingestion of {total_folders} folder(s)…")
-
-    #         logs: list[str] = []
-
-    #         # Define callback for each processed file
-    #         def progress_callback(idx: int, total: int, filename: str):
-    #             fraction = idx / total
-    #             progress_bar.progress(fraction, text=f"Processing {filename} ({idx}/{total})")
-    #             logs.append(f"[{idx}/{total}] Processed: {filename}")
-    #             log_placeholder.text("\n".join(logs))
-
-    #         # Run ingestion
-    #         summary = ingest_all_candidates(resumes_folder, progress_callback)
-
-    #         # Finalize progress and status
-    #         progress_bar.progress(1.0, text="Completed")
-    #         status_placeholder.success("✅ Ingestion complete!")
-
-    #         # Append summary logs
-    #         for line in summary:
-    #             logs.append(line)
-    #         log_placeholder.text("\n".join(logs))
-
-    # else:
-    #     status_placeholder.info("Click 'Run Ingestion' in the sidebar to begin.")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Skill Categories Mode
