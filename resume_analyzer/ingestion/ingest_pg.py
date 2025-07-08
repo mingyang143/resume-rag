@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from ..backend.model import Qwen2VLClient    
 from .helpers import connect_postgres, convert_docx_to_pdf_via_libreoffice, compute_months_between, normalize_salary, normalize_partfull_time, normalize_university, ensure_resumes_table, upsert_resume_metadata
+from ..frontend.pdf_server import pdf_server
 
 load_dotenv()
 
@@ -215,6 +216,7 @@ def ingest_all_resumes(
       • Converts only first page → image.
       • Calls Qwen2VL to extract the 7 fields.
       • Inserts/Updates one row in Postgres.
+      • Uploads PDF to web server and stores URL.
     """
     env = load_env_vars()
     conn = connect_postgres(env)
@@ -234,7 +236,6 @@ def ingest_all_resumes(
     if total == 0:
         summary_logs.append("⚠️ No PDF/DOCX files found in the folder.")
         return summary_logs
-
 
     for idx, fname in enumerate(all_files, start=1):
         lower = fname.lower()
@@ -256,18 +257,19 @@ def ingest_all_resumes(
 
             processing_pdf = pdf_basename
 
-        # 2) If it’s already a .pdf, use it directly:
+        # 2) If it's already a .pdf, use it directly:
         elif lower.endswith(".pdf"):
             processing_pdf = fname
             pdf_path = os.path.join(resumes_folder, processing_pdf)
 
         else:
             continue
+
         print("----------------------------------------------------")
         print(f"Processing PDF: {fname}")
         print("----------------------------------------------------")
 
-        # 1) Only convert the FIRST page:
+        # 3) Only convert the FIRST page:
         with tempfile.TemporaryDirectory() as per_resume_tmpdir:
             pages = convert_from_path(pdf_path, dpi=150, first_page=1, last_page=1)
             if not pages:
@@ -280,7 +282,7 @@ def ingest_all_resumes(
             )
             pages[0].save(image_for_qwen, "JPEG")
 
-            # 2) Extract via Qwen:
+            # 4) Extract via Qwen:
             print("----------------------------------------------------")
             print("  • Calling Qwen to extract metadata fields (first page only)…")
             print("----------------------------------------------------")
@@ -297,15 +299,37 @@ def ingest_all_resumes(
                 )
                 continue
 
-            summary_logs.append(f"✓ Done with {processing_pdf}")
+            # 5) Upload PDF to web server BEFORE database insertion
+            print("----------------------------------------------------")
+            print(f"  • Uploading PDF to web server: {fname}")
+            print("----------------------------------------------------")
+            
+            # Determine file type
+            if 'mikomiko' in fname.lower():
+                file_type = 'mikomiko'
+            else:
+                file_type = 'resume'
+            
+            # Upload PDF and get URL
+            pdf_url = pdf_server.upload_pdf(pdf_path, candidate_key, file_type)
+            
+            # Add PDF URL to fields if upload successful
+            if pdf_url:
+                fields['pdf_url'] = pdf_url
+                print(f"✅ PDF uploaded to server: {pdf_url}")
+            else:
+                print(f"❌ Failed to upload PDF: {fname}")
+                fields['pdf_url'] = None
 
-            # 3) Upsert into Postgres:
+            # 6) Upsert into Postgres (now includes PDF URL):
             print("----------------------------------------------------")
             print("  • Upserting metadata into Postgres…")
             print("----------------------------------------------------")
             upsert_resume_metadata(cur, processing_pdf, candidate_key, fields)
             conn.commit()
-            print(f"  ✓ Done with {fname}.")
+            print(f"  ✓ Metadata and PDF URL stored for {fname}.")
+
+            summary_logs.append(f"✓ Done with {processing_pdf}")
 
     cur.close()
     conn.close()

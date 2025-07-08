@@ -649,52 +649,57 @@ def get_candidate_details(candidate_key: str) -> Dict:
 def delete_candidate_records(candidate_key: str) -> Dict[str, int]:
     """
     Delete all records for a specific candidate from metadata, normal, and score tables.
+    Also delete PDF files from the server.
     """
     try:
+        # Import PDF server
+        from ..frontend.pdf_server import pdf_server
+        
         env = load_env_vars()
         conn = connect_postgres(env)
         cur = conn.cursor()
 
-        # 1) Delete from resumes_metadata
+        # Get PDF URLs before deletion
         cur.execute("""
-            DELETE FROM public.resumes_metadata
-            WHERE candidate_key = %s;
-        """, (candidate_key,))
+            SELECT pdf_url FROM public.resumes_metadata WHERE candidate_key = %s AND pdf_url IS NOT NULL
+            UNION
+            SELECT pdf_url FROM public.resumes_normal WHERE candidate_key = %s AND pdf_url IS NOT NULL
+        """, (candidate_key, candidate_key))
+        
+        pdf_urls = [row[0] for row in cur.fetchall()]
+        
+        # Delete PDF files from server
+        for pdf_url in pdf_urls:
+            pdf_server.delete_pdf(pdf_url)
+        
+        # 1) Delete from resumes_metadata
+        cur.execute("DELETE FROM public.resumes_metadata WHERE candidate_key = %s;", (candidate_key,))
         metadata_deleted = cur.rowcount
 
         # 2) Delete from resumes_normal
-        cur.execute("""
-            DELETE FROM public.resumes_normal
-            WHERE candidate_key = %s;
-        """, (candidate_key,))
+        cur.execute("DELETE FROM public.resumes_normal WHERE candidate_key = %s;", (candidate_key,))
         normal_deleted = cur.rowcount
 
         # 3) Delete from resume_category_score
-        cur.execute("""
-            DELETE FROM public.resume_category_score
-            WHERE candidate_key = %s;
-        """, (candidate_key,))
+        cur.execute("DELETE FROM public.resume_category_score WHERE candidate_key = %s;", (candidate_key,))
         score_deleted = cur.rowcount
 
         conn.commit()
         cur.close()
         conn.close()
 
+        print(f"✅ Deleted candidate {candidate_key} and {len(pdf_urls)} PDF files")
+
         return {
             'metadata_deleted': metadata_deleted,
             'normal_deleted': normal_deleted,
-            'score_deleted':    score_deleted,
-            'total_deleted':    metadata_deleted + normal_deleted + score_deleted,
+            'score_deleted': score_deleted,
+            'total_deleted': metadata_deleted + normal_deleted + score_deleted,
         }
 
     except Exception as e:
-        st.error(f"Error deleting candidate records: {e}")
-        return {
-            'metadata_deleted': 0,
-            'normal_deleted':   0,
-            'score_deleted':    0,
-            'total_deleted':    0,
-        }
+        print(f"❌ Error deleting candidate: {e}")
+        return {'metadata_deleted': 0, 'normal_deleted': 0, 'score_deleted': 0, 'total_deleted': 0}
 
 
 def render_deletion_tab() -> None:
@@ -1247,7 +1252,7 @@ def render_score_table() -> None:
     """
     st.markdown("### 📈 Candidate Skill Category Scores")
 
-    # —– Fetch data from Postgres —–
+    # Enhanced query to fetch PDF URLs
     env  = load_env_vars()
     conn = connect_postgres(env)
     cur  = conn.cursor()
@@ -1256,9 +1261,15 @@ def render_score_table() -> None:
           s.candidate_key AS candidate_name,
           s.candidate_key,
           c.name AS category,
-          s.score
+          s.score,
+          rm.filename AS metadata_file,
+          rm.pdf_url AS mikomiko_url,
+          rn.filename AS resume_file,
+          rn.pdf_url AS resume_url
         FROM resume_category_score s
         JOIN skill_category c ON c.id = s.category_id
+        LEFT JOIN resumes_metadata rm ON s.candidate_key = rm.candidate_key
+        LEFT JOIN resumes_normal rn ON s.candidate_key = rn.candidate_key
     """)
     rows = cur.fetchall()
     cur.close()
@@ -1267,17 +1278,39 @@ def render_score_table() -> None:
     if not rows:
         st.info("No category scores yet.")
         return
-
-    # 1) Build the pivot table using candidate names
-    df = pd.DataFrame(rows, columns=["candidate_name", "candidate_key", "category", "score"])
+    
+    # Build file mappings with URLs using ALL 8 columns
+    file_mappings = {}
+    df_full = pd.DataFrame(rows, columns=[
+        "candidate_name", "candidate_key", "category", "score", 
+        "metadata_file", "mikomiko_url", "resume_file", "resume_url"
+    ])
+    
+    for _, row in df_full.iterrows():
+        candidate = row['candidate_name']
+        if candidate not in file_mappings:
+            file_mappings[candidate] = {
+                'mikomiko_file': row['metadata_file'],
+                'mikomiko_url': row['mikomiko_url'],
+                'resume_file': row['resume_file'],
+                'resume_url': row['resume_url']
+            }
+    
+    # 1) Build the pivot table using candidate names (only need first 4 columns)
+    df = pd.DataFrame(rows, columns=["candidate_name", "candidate_key", "category", "score", 
+                                    "metadata_file", "mikomiko_url", "resume_file", "resume_url"])
+    
+    # Keep only the columns we need for the pivot
+    df_pivot = df[["candidate_name", "candidate_key", "category", "score"]]
+    
     pivot = (
-        df.pivot(index="candidate_name", columns="category", values="score")
+        df_pivot.pivot(index="candidate_name", columns="category", values="score")
           .fillna(0)
           .astype(int)
     )
     
     # Add candidate_key column for filtering
-    candidate_mapping = df.drop_duplicates('candidate_name').set_index('candidate_name')['candidate_key']
+    candidate_mapping = df_pivot.drop_duplicates('candidate_name').set_index('candidate_name')['candidate_key']
     pivot['candidate_key'] = candidate_mapping
     
     # 2) Add average score column
@@ -1338,23 +1371,9 @@ def render_score_table() -> None:
         filtered_pivot = filtered_pivot[mask]
         st.info(f"📊 Filter results: **{len(filtered_pivot)}** candidates with score ≥{min_score_filter}")
     
-    # # CRITICAL FIX: Apply sorting BEFORE pagination
-    # filtered_pivot = filtered_pivot.sort_values(sort_by, ascending=False)
-    
-    # # Show sorting info
-    # if sort_by != 'Average Score':
-    #     st.info(f"📊 Sorted by **{sort_by}** (highest to lowest)")
     
     # CRITICAL FIX: Apply sorting BEFORE pagination
     filtered_pivot = filtered_pivot.sort_values(sort_by, ascending=False)
-    
-    # DEBUG: Show what sorting actually produced
-    st.write(f"**DEBUG: Top 3 candidates after sorting by {sort_by}:**")
-    debug_cols = ['candidate_key', sort_by]
-    if sort_by != 'Average Score':
-        debug_cols.append('Average Score')
-    top_3_debug = filtered_pivot.head(3)[debug_cols]
-    st.dataframe(top_3_debug)
     
     # Show sorting info
     if sort_by != 'Average Score':
@@ -1503,19 +1522,84 @@ def render_score_table() -> None:
             use_container_width=True
         )
 
+    # === NEW: PDF LINKS SECTION ===
+    st.markdown("---")
+    st.markdown("#### 📄 Direct PDF Access")
+    st.markdown("*Click the buttons below to view candidate PDFs directly in your browser*")
+    
+    # Show PDF links for current page candidates
+    for candidate_name in paginated_df.index:
+        candidate_files = file_mappings.get(candidate_name, {})
+        
+        with st.expander(f"👤 **{candidate_name}**", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**📊 Candidate Summary:**")
+                row_data = paginated_df.loc[candidate_name]
+                avg_score = row_data.get('Average Score', 0)
+                st.metric("Average Score", f"{avg_score:.2f}")
+                
+                # Show top 3 skills
+                skill_scores = {}
+                for skill in other_skills:
+                    if skill in row_data:
+                        skill_scores[skill] = row_data[skill]
+                
+                if skill_scores:
+                    # Sort by score and show top 3
+                    top_skills = sorted(skill_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+                    st.markdown("**🎯 Top Skills:**")
+                    for skill, score in top_skills:
+                        st.write(f"• {skill}: **{score}**")
+            
+            with col2:
+                st.markdown("**📄 PDF Links:**")
+                
+                # MikoMiko PDF link
+                if candidate_files.get('mikomiko_url'):
+                    st.markdown(f"""
+                    <a href="{candidate_files['mikomiko_url']}" target="_blank">
+                        <button style="background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; width: 90%;">
+                            📋 Open MikoMiko PDF
+                        </button>
+                    </a>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.info("📋 No MikoMiko PDF available")
+                
+                # Resume PDF link
+                if candidate_files.get('resume_url'):
+                    st.markdown(f"""
+                    <a href="{candidate_files['resume_url']}" target="_blank">
+                        <button style="background-color: #2196F3; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; width: 90%;">
+                            📄 Open Resume PDF
+                        </button>
+                    </a>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.info("📄 No Resume PDF available")
+                
+                # Show file info
+                st.markdown("**📁 File Info:**")
+                if candidate_files.get('mikomiko_file'):
+                    st.caption(f"📋 MikoMiko: {candidate_files['mikomiko_file']}")
+                if candidate_files.get('resume_file'):
+                    st.caption(f"📄 Resume: {candidate_files['resume_file']}")
 
 
 def render_delete_all_resumes() -> None:
     """
     Render the delete all resumes functionality.
+    Also delete all PDF files from the server.
     """
     st.markdown("---")
     st.markdown("### 🧹 Bulk Delete All Data")
-    st.warning("⚠️ This will permanently erase **all** candidate and resume data. Use with extreme caution!")
+    st.warning("⚠️ This will permanently erase **all** candidate and resume data AND PDF files. Use with extreme caution!")
 
     # ── A) If we just succeeded, show banner and clear flag ───────────
     if st.session_state.get("delete_success", False):
-        st.success("✅ All records have been deleted.")
+        st.success("✅ All records and PDF files have been deleted.")
         # clear so it only shows once
         del st.session_state["delete_success"]
 
@@ -1527,20 +1611,37 @@ def render_delete_all_resumes() -> None:
         default_confirm = st.session_state.get("confirm_delete_all", False)
 
     confirm = st.checkbox(
-        "I understand this cannot be undone",
+        "I understand this cannot be undone and will delete all PDF files",
         value=default_confirm,
         key="confirm_delete_all",
     )
 
-    # ── C) Single “Delete All” button ───────────────────────────────
-    if st.button("🗑️ DELETE ALL RECORDS", key="delete_all_btn"):
+    # ── C) Single "Delete All" button ───────────────────────────────
+    if st.button("🗑️ DELETE ALL RECORDS & PDF FILES", key="delete_all_btn"):
         if not confirm:
             st.error("You must check the box above to delete everything.")
         else:
             try:
-                env  = load_env_vars()
+                # Import PDF server delete function
+                from ..frontend.pdf_server import delete_all_pdf_files
+                
+                env = load_env_vars()
                 conn = connect_postgres(env)
-                cur  = conn.cursor()
+                cur = conn.cursor()
+                
+                print(f"🗑️ Starting bulk deletion of all data...")
+                
+                # Delete all PDF files from server (simplified approach)
+                print(f"🗑️ Deleting all PDF files from server...")
+                pdf_deletion_success = delete_all_pdf_files()
+                
+                if pdf_deletion_success:
+                    print(f"✅ All PDF files deleted from server")
+                else:
+                    print(f"⚠️ Warning: PDF file deletion may have failed")
+                
+                # Delete all database records
+                print(f"🗑️ Deleting all database records...")
                 cur.execute("""
                     TRUNCATE TABLE
                       public.resumes_metadata,
@@ -1552,14 +1653,17 @@ def render_delete_all_resumes() -> None:
                 cur.close()
                 conn.close()
 
+                print(f"✅ Deleted all database records and PDF files")
+
                 # instead of st.success(), set a flag and rerun
-                st.session_state["delete_success"]   = True
+                st.session_state["delete_success"] = True
                 st.session_state["deleted_all_once"] = True
                 st.rerun()
 
             except Exception as e:
+                print(f"❌ Error deleting all records: {e}")
                 st.error(f"❌ Failed to delete all records: {e}")
-    
+
 def render_job_description_main_content() -> None:
     """Main content area for job description processing."""
     print("🔥" * 30)

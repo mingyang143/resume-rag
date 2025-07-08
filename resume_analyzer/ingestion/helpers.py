@@ -123,7 +123,7 @@ def load_env_vars():
 
 def ensure_resumes_table(cur):
     """
-    Ensure the resumes_metadata table exists with all required columns including email.
+    Ensure the resumes_metadata table exists with all required columns including email and pdf_url.
     """
     cur.execute("""
         CREATE TABLE IF NOT EXISTS public.resumes_metadata (
@@ -138,7 +138,8 @@ def ensure_resumes_table(cur):
             is_credit_bearing      TEXT,
             citizenship            TEXT,
             from_date              TEXT,
-            to_date                TEXT
+            to_date                TEXT,
+            pdf_url                TEXT
         );
     """)
 
@@ -192,61 +193,91 @@ def ensure_resumes_table(cur):
 #         ]
 #     )
 
-def upsert_resume_metadata(
-    cur,
-    filename: str,
-    candidate_key: str,
-    fields: Dict[str, Optional[str]]
-) -> None:
-    """
-    Inserts or updates a row in resumes_metadata, now with candidate_key and email.
-    """
-    cur.execute(
-        """
-        INSERT INTO public.resumes_metadata
-            (filename, candidate_key, email,
-             work_duration_category, university, applied_position,
-             salary, part_or_full, is_credit_bearing, citizenship,
-             from_date, to_date)
-        VALUES (
-            %s, %s, %s,
-            %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, %s
-        )
-        ON CONFLICT (filename) DO UPDATE
-          SET candidate_key          = EXCLUDED.candidate_key,
-              email                  = EXCLUDED.email,
-              work_duration_category = EXCLUDED.work_duration_category,
-              university             = EXCLUDED.university,
-              applied_position       = EXCLUDED.applied_position,
-              salary                 = EXCLUDED.salary,
-              part_or_full           = EXCLUDED.part_or_full,
-              is_credit_bearing      = EXCLUDED.is_credit_bearing,
-              citizenship            = EXCLUDED.citizenship,
-              from_date              = EXCLUDED.from_date,
-              to_date                = EXCLUDED.to_date;
-        """,
-        [
-            filename,
-            candidate_key,
-            fields.get("email"),  # ADD THIS LINE
-            fields.get("work_duration_category"),
-            fields.get("university"),
-            fields.get("applied_position"),
-            fields.get("salary"),
-            fields.get("part_or_full"),
-            fields.get("is_credit_bearing"),
-            fields.get("citizenship"),
-            fields.get("from_date"),
-            fields.get("to_date"),
-        ]
-    )
+# def upsert_resume_metadata(
+#     cur,
+#     filename: str,
+#     candidate_key: str,
+#     fields: Dict[str, Optional[str]]
+# ) -> None:
+#     """
+#     Inserts or updates a row in resumes_metadata, now with candidate_key and email.
+#     """
+#     cur.execute(
+#         """
+#         INSERT INTO public.resumes_metadata
+#             (filename, candidate_key, email,
+#              work_duration_category, university, applied_position,
+#              salary, part_or_full, is_credit_bearing, citizenship,
+#              from_date, to_date)
+#         VALUES (
+#             %s, %s, %s,
+#             %s, %s, %s,
+#             %s, %s, %s, %s,
+#             %s, %s
+#         )
+#         ON CONFLICT (filename) DO UPDATE
+#           SET candidate_key          = EXCLUDED.candidate_key,
+#               email                  = EXCLUDED.email,
+#               work_duration_category = EXCLUDED.work_duration_category,
+#               university             = EXCLUDED.university,
+#               applied_position       = EXCLUDED.applied_position,
+#               salary                 = EXCLUDED.salary,
+#               part_or_full           = EXCLUDED.part_or_full,
+#               is_credit_bearing      = EXCLUDED.is_credit_bearing,
+#               citizenship            = EXCLUDED.citizenship,
+#               from_date              = EXCLUDED.from_date,
+#               to_date                = EXCLUDED.to_date;
+#         """,
+#         [
+#             filename,
+#             candidate_key,
+#             fields.get("email"),  # ADD THIS LINE
+#             fields.get("work_duration_category"),
+#             fields.get("university"),
+#             fields.get("applied_position"),
+#             fields.get("salary"),
+#             fields.get("part_or_full"),
+#             fields.get("is_credit_bearing"),
+#             fields.get("citizenship"),
+#             fields.get("from_date"),
+#             fields.get("to_date"),
+#         ]
+#     )
+
+def upsert_resume_metadata(cur, filename: str, candidate_key: str, fields: Dict[str, Optional[str]]):
+    """Upsert resume metadata including PDF URL."""
+    
+    cur.execute("""
+        INSERT INTO public.resumes_metadata (
+            filename, candidate_key, email, work_duration_category, 
+            university, applied_position, salary, part_or_full, 
+            is_credit_bearing, citizenship, from_date, to_date, pdf_url
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (filename) 
+        DO UPDATE SET
+            candidate_key = EXCLUDED.candidate_key,
+            email = EXCLUDED.email,
+            work_duration_category = EXCLUDED.work_duration_category,
+            university = EXCLUDED.university,
+            applied_position = EXCLUDED.applied_position,
+            salary = EXCLUDED.salary,
+            part_or_full = EXCLUDED.part_or_full,
+            is_credit_bearing = EXCLUDED.is_credit_bearing,
+            citizenship = EXCLUDED.citizenship,
+            from_date = EXCLUDED.from_date,
+            to_date = EXCLUDED.to_date,
+            pdf_url = EXCLUDED.pdf_url
+    """, (
+        filename, candidate_key, fields.get('email'), fields.get('work_duration_category'),
+        fields.get('university'), fields.get('applied_position'), fields.get('salary'),
+        fields.get('part_or_full'), fields.get('is_credit_bearing'), fields.get('citizenship'),
+        fields.get('from_date'), fields.get('to_date'), fields.get('pdf_url')
+    ))
 
 def ensure_resumes_normal_table(cur):
     """
     Creates the `resumes_normal` table if it does not exist,
-    adding candidate_key to link back to metadata.
+    adding candidate_key to link back to metadata and pdf_url.
     """
     cur.execute("""
     CREATE TABLE IF NOT EXISTS public.resumes_normal (
@@ -254,7 +285,8 @@ def ensure_resumes_normal_table(cur):
         candidate_key   TEXT     NOT NULL,
         skills_categories TEXT[],
         full_resume_txt TEXT,
-        skills_summary_txt TEXT
+        skills_summary_txt TEXT,
+        pdf_url         TEXT
     );
     """)
 
@@ -264,28 +296,31 @@ def upsert_resumes_normal(
     candidate_key: str,
     skills_categories: List[str],
     full_resume_txt: str,
-    skills_summary_txt: str = None
+    skills_summary_txt: str = None,
+    pdf_url: str = None
 ):
     """
-    Inserts or updates a row in resumes_normal, now with candidate_key.
+    Inserts or updates a row in resumes_normal, now with candidate_key and pdf_url.
     """
     cur.execute("""
     INSERT INTO public.resumes_normal
-      (filename, candidate_key, skills_categories, full_resume_txt, skills_summary_txt)
+      (filename, candidate_key, skills_categories, full_resume_txt, skills_summary_txt, pdf_url)
     VALUES (
-      %s, %s, %s, %s, %s
+      %s, %s, %s, %s, %s, %s
     )
     ON CONFLICT (filename) DO UPDATE
       SET candidate_key   = EXCLUDED.candidate_key,
           skills_categories = EXCLUDED.skills_categories,
           full_resume_txt = EXCLUDED.full_resume_txt,
-          skills_summary_txt = EXCLUDED.skills_summary_txt
+          skills_summary_txt = EXCLUDED.skills_summary_txt,
+          pdf_url = EXCLUDED.pdf_url
     """, [
         filename,
         candidate_key,
         skills_categories,
         full_resume_txt,
         skills_summary_txt,
+        pdf_url,
     ])
 
 def convert_docx_to_pdf_via_libreoffice(docx_path: str, pdf_path: str) -> None:

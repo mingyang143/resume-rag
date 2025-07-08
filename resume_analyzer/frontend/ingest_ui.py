@@ -13,7 +13,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from resume_analyzer.ingestion.ingest_pg import ingest_all_resumes, load_env_vars
-from resume_analyzer.ingestion.ingest_all import ingest_all_candidates
+from resume_analyzer.ingestion.ingest_all import ingest_all_candidates_with_progress
 from resume_analyzer.ingestion.helpers import (
     connect_postgres,
     ensure_resumes_table,
@@ -30,11 +30,26 @@ from resume_analyzer.ingestion.helpers import convert_docx_to_pdf_via_libreoffic
 from resume_analyzer.frontend.helpers import render_deletion_tab, render_overview_dashboard, get_quick_stats, render_skills_management_tab, render_score_table, render_delete_all_resumes, render_job_description_main_content
 from resume_analyzer.backend.email_service import EmailService
 from resume_analyzer.frontend.email_ui_helpers import process_user_input
+from resume_analyzer.frontend.pdf_server import debug_pdf_server, test_pdf_server
 from pdf2image import convert_from_path
 import tempfile
 import json
 
 email_service = EmailService()
+
+# In ingest_ui.py, add this after your imports:
+from resume_analyzer.frontend.pdf_server import pdf_server
+
+
+# ... rest of your Streamlit code ...
+
+# Add this in your sidebar or main area:
+st.sidebar.markdown("---")
+st.sidebar.markdown("🌐 **PDF Server:** Running on http://192.168.1.172:8085")
+
+# Add these to your Python console or Streamlit app
+debug_pdf_server()  # Shows server status and file listing
+test_pdf_server()   # Tests server connectivity
 
 # # Add a session state check to prevent multiple initializations
 def initialize_database_once():
@@ -60,6 +75,58 @@ def initialize_database_once():
 # Call this instead of direct initialization
 initialize_database_once()
 
+from resume_analyzer.ingestion.ingest_all import ingest_all_candidates_with_progress
+
+from resume_analyzer.backend.progress_tracker import ProgressTracker
+
+# Add this function after your existing functions:
+def render_ingestion_progress():
+    """Render current ingestion progress"""
+    st.markdown("### 📊 Active Ingestion Progress")
+    
+    try:
+        env = load_env_vars()
+        conn = connect_postgres(env)
+        tracker = ProgressTracker(conn)
+        
+        # Get all active sessions
+        active_sessions = tracker.get_all_active_sessions()
+        
+        if not active_sessions:
+            st.info("✅ No active ingestion sessions")
+            conn.close()
+            return
+        
+        for session in active_sessions:
+            with st.expander(f"📋 Session: {session['session_id'][:8]}...", expanded=True):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write(f"**Status:** {session['status']}")
+                    st.write(f"**Started:** {session['started_at'].strftime('%H:%M:%S')}")
+                    current_file = session['current_file'] or 'N/A'
+                    if len(current_file) > 50:
+                        current_file = current_file[:47] + "..."
+                    st.write(f"**Current:** {current_file}")
+                
+                with col2:
+                    progress = session['processed_files'] / session['total_files'] if session['total_files'] > 0 else 0
+                    st.progress(progress)
+                    st.write(f"**Progress:** {session['processed_files']}/{session['total_files']} files")
+                    
+                    if session['errors']:
+                        st.error(f"⚠️ {len(session['errors'])} errors occurred")
+                        with st.expander("View Errors"):
+                            for error in session['errors'][-5:]:  # Show last 5 errors
+                                st.write(f"❌ {error}")
+        
+        conn.close()
+        
+    except Exception as e:
+        st.error(f"❌ Error fetching progress: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
 # Initialize session state for pending emails
 if 'pending_email' not in st.session_state:
     st.session_state.pending_email = None
@@ -70,6 +137,51 @@ load_dotenv()  # In case helpers need environment variables
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STREAMLIT APP
+
+# Add this test button temporarily:
+
+st.markdown("### 🧪 Debug Progress Tracker Database")
+if st.button("Test Database Connection"):
+    try:
+        env = load_env_vars()
+        conn = connect_postgres(env)
+        
+        # Test if the progress table exists
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM information_schema.tables 
+            WHERE table_name = 'ingestion_progress'
+        """)
+        table_exists = cur.fetchone()[0] > 0
+        
+        if table_exists:
+            st.success("✅ Progress table exists")
+            
+            # Test inserting a record
+            tracker = ProgressTracker(conn)
+            import uuid
+            test_id = str(uuid.uuid4())
+            
+            tracker.start_ingestion(test_id, 5, {"test": "debug"})
+            tracker.update_progress(test_id, 1, "Test file")
+            
+            # Test retrieving it
+            progress = tracker.get_progress(test_id)
+            st.write("Test progress:", progress)
+            
+            # Clean up
+            tracker.finish_ingestion(test_id, "COMPLETED")
+            
+        else:
+            st.error("❌ Progress table doesn't exist")
+            
+        cur.close()
+        conn.close()
+        
+    except Exception as e:
+        st.error(f"❌ Database test failed: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 # ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="📥 Resume Management Dashboard",
@@ -132,6 +244,13 @@ with st.sidebar:
     )
 
     if mode == "📥 Ingestion":
+        # st.markdown("### 📂 Ingestion Settings")
+        # resumes_folder = st.text_input(
+        #     "Folder Path",
+        #     placeholder="/path/to/resumes/folder",
+        # )
+        # st.caption("Enter the absolute path to the folder containing PDF/DOCX resumes.")
+        # run_button = st.button("🔄 Run Ingestion")
         st.markdown("### 📂 Ingestion Settings")
         resumes_folder = st.text_input(
             "Folder Path",
@@ -139,6 +258,33 @@ with st.sidebar:
         )
         st.caption("Enter the absolute path to the folder containing PDF/DOCX resumes.")
         run_button = st.button("🔄 Run Ingestion")
+        
+        # ADD ONLY THIS: Quick progress display in sidebar
+        st.markdown("### 📊 Quick Progress")
+        try:
+            env = load_env_vars()
+            conn = connect_postgres(env)
+            tracker = ProgressTracker(conn)
+            
+            active_sessions = tracker.get_all_active_sessions()
+            
+            if active_sessions:
+                for session in active_sessions:
+                    progress = session['processed_files'] / session['total_files'] if session['total_files'] > 0 else 0
+                    st.progress(progress)
+                    st.caption(f"📄 {session['processed_files']}/{session['total_files']} files")
+                    
+                    current_file = session['current_file']
+                    if current_file and len(current_file) > 20:
+                        current_file = current_file[:17] + "..."
+                    st.caption(f"🔄 {current_file or 'Processing...'}")
+            else:
+                st.caption("✅ No active sessions")
+            
+            conn.close()
+            
+        except Exception as e:
+            st.caption(f"❌ Progress error: {e}")
         
     elif mode == "✏️ Manual Add":
         pass
@@ -178,6 +324,11 @@ if mode == "📊 Overview":
 # Ingestion Mode
 # ──────────────────────────────────────────────────────────────────────────────
 elif mode == "📥 Ingestion":
+    # Always show progress first
+    render_ingestion_progress()
+    
+    st.markdown("---")
+    st.markdown("### 📤 Start New Ingestion")
 
     if not resumes_folder:
         status_placeholder.info("Enter a folder path in the sidebar to begin ingestion.")
@@ -198,18 +349,19 @@ elif mode == "📥 Ingestion":
         st.metric("📂 Folder", os.path.basename(resumes_folder))
         st.metric("🗂️ Candidates", len(candidates))
     with col2:
-        st.dataframe(
-            {
-                "Candidate folder": candidates,
-                "Num Resumes": [
-                    len([f for f in os.listdir(os.path.join(resumes_folder, d))
-                    if f.lower().endswith((".pdf", ".docx"))
-                ])
-                for d in candidates
-                ],
-            },
-            height=200,
-        )
+        if candidates:
+            st.dataframe(
+                {
+                    "Candidate folder": candidates,
+                    "Num Resumes": [
+                        len([f for f in os.listdir(os.path.join(resumes_folder, d))
+                        if f.lower().endswith((".pdf", ".docx"))
+                    ])
+                    for d in candidates
+                    ],
+                },
+                height=200,
+            )
 
     st.markdown("---")
 
@@ -226,7 +378,7 @@ elif mode == "📥 Ingestion":
         else:
             # Initialize progress bar
             progress_bar = progress_placeholder.progress(0.0, text="Starting…")
-            status_placeholder.info(f"Starting ingestion of {total_folders} folder(s)…")
+            status_placeholder.info(f"🚀 Starting background ingestion of {total_folders} folder(s)…")
 
             logs: list[str] = []
 
@@ -235,22 +387,122 @@ elif mode == "📥 Ingestion":
                 fraction = idx / total
                 progress_bar.progress(fraction, text=f"Processing {filename} ({idx}/{total})")
                 logs.append(f"[{idx}/{total}] Processed: {filename}")
+                log_placeholder.text("\n".join(logs[-10:]))  # Show last 10 logs
+
+            try:
+                # Start ingestion in background with progress tracking
+                summary, session_id = ingest_all_candidates_with_progress(
+                    resumes_folder, 
+                    progress_callback,
+                    max_workers=2  # Reduce workers for better progress tracking
+                )
+                
+                # Finalize progress and status
+                progress_bar.progress(1.0, text="Completed")
+                status_placeholder.success(f"✅ Ingestion complete! Session ID: {session_id[:8]}...")
+
+                # Append summary logs
+                for line in summary:
+                    logs.append(line)
+                log_placeholder.text("\n".join(logs[-15:]))  # Show last 15 logs
+                
+                # Auto-refresh to show updated progress
+                time.sleep(2)
+                st.rerun()
+
+            except Exception as e:
+                progress_bar.progress(0.0, text="Failed")
+                status_placeholder.error(f"❌ Ingestion failed: {str(e)}")
+                logs.append(f"❌ Error: {str(e)}")
                 log_placeholder.text("\n".join(logs))
 
-            # Run ingestion
-            summary = ingest_all_candidates(resumes_folder, progress_callback)
+    # Add auto-refresh toggle
+    st.markdown("---")
+    auto_refresh = st.checkbox(
+        "🔄 Auto-refresh progress (every 5 seconds)", 
+        value=False,
+        help="Automatically refresh to show real-time progress"
+    )
+    
+    if auto_refresh:
+        time.sleep(5)
+        st.rerun()
 
-            # Finalize progress and status
-            progress_bar.progress(1.0, text="Completed")
-            status_placeholder.success("✅ Ingestion complete!")
-
-            # Append summary logs
-            for line in summary:
-                logs.append(line)
-            log_placeholder.text("\n".join(logs))
-
-    else:
+    if not run_button:
         status_placeholder.info("Click 'Run Ingestion' in the sidebar to begin.")
+
+    # if not resumes_folder:
+    #     status_placeholder.info("Enter a folder path in the sidebar to begin ingestion.")
+    #     st.stop()
+
+    # if not os.path.isdir(resumes_folder):
+    #     status_placeholder.error("❌ The provided path does not exist or is not a directory.")
+    #     st.stop()
+
+    # # Show folder summary
+    # candidates = [
+    #     d for d in os.listdir(resumes_folder)
+    #     if os.path.isdir(os.path.join(resumes_folder, d))
+    # ]
+
+    # col1, col2 = st.columns([1, 3])
+    # with col1:
+    #     st.metric("📂 Folder", os.path.basename(resumes_folder))
+    #     st.metric("🗂️ Candidates", len(candidates))
+    # with col2:
+    #     st.dataframe(
+    #         {
+    #             "Candidate folder": candidates,
+    #             "Num Resumes": [
+    #                 len([f for f in os.listdir(os.path.join(resumes_folder, d))
+    #                 if f.lower().endswith((".pdf", ".docx"))
+    #             ])
+    #             for d in candidates
+    #             ],
+    #         },
+    #         height=200,
+    #     )
+
+    # st.markdown("---")
+
+    # if run_button:
+    #     # Clear placeholders
+    #     progress_placeholder.empty()
+    #     status_placeholder.empty()
+    #     log_placeholder.empty()
+    #     results_placeholder.empty()
+
+    #     total_folders = len(candidates)
+    #     if total_folders == 0:
+    #         status_placeholder.warning("⚠️ No folders found to ingest.")
+    #     else:
+    #         # Initialize progress bar
+    #         progress_bar = progress_placeholder.progress(0.0, text="Starting…")
+    #         status_placeholder.info(f"Starting ingestion of {total_folders} folder(s)…")
+
+    #         logs: list[str] = []
+
+    #         # Define callback for each processed file
+    #         def progress_callback(idx: int, total: int, filename: str):
+    #             fraction = idx / total
+    #             progress_bar.progress(fraction, text=f"Processing {filename} ({idx}/{total})")
+    #             logs.append(f"[{idx}/{total}] Processed: {filename}")
+    #             log_placeholder.text("\n".join(logs))
+
+    #         # Run ingestion
+    #         summary = ingest_all_candidates(resumes_folder, progress_callback)
+
+    #         # Finalize progress and status
+    #         progress_bar.progress(1.0, text="Completed")
+    #         status_placeholder.success("✅ Ingestion complete!")
+
+    #         # Append summary logs
+    #         for line in summary:
+    #             logs.append(line)
+    #         log_placeholder.text("\n".join(logs))
+
+    # else:
+    #     status_placeholder.info("Click 'Run Ingestion' in the sidebar to begin.")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Skill Categories Mode
@@ -496,10 +748,16 @@ elif mode == "✏️ Manual Add":
                         conn.commit()
                         
                         success_count = 0
-                        
+                        from resume_analyzer.frontend.pdf_server import pdf_server
+
                         with st.spinner("🔄 Processing files..."):
                             # Process mikomiko file - insert metadata into resumes_metadata
                             miko_filename = files_info['miko_file']
+                            miko_file_path = os.path.join(files_info['folder_path'], miko_filename)
+                            
+                            # NEW: Upload mikomiko PDF to server
+                            st.info("📤 Uploading MikoMiko PDF to server...")
+                            miko_pdf_url = pdf_server.upload_pdf(miko_file_path, candidate_key.strip(), 'mikomiko')
                             
                             # Prepare metadata fields from the edited form
                             fields = {
@@ -515,25 +773,53 @@ elif mode == "✏️ Manual Add":
                                 "to_date": to_date.strip() or None,
                             }
                             
+                            # Add PDF URL to fields if upload successful
+                            if miko_pdf_url:
+                                fields["pdf_url"] = miko_pdf_url
+                                st.success(f"✅ MikoMiko PDF uploaded: {miko_pdf_url}")
+                            else:
+                                st.warning("⚠️ MikoMiko PDF upload failed")
+                                fields["pdf_url"] = None
+                            
                             # Insert mikomiko file metadata into resumes_metadata
                             upsert_resume_metadata(cur, miko_filename, candidate_key.strip(), fields)
                             st.success(f"✅ Metadata inserted for: {miko_filename}")
                             success_count += 1
                             
-                            # Process other file - insert metadata into resumes_metadata
+                            # Process other file - insert metadata into resumes_normal table
                             other_filename = files_info['other_file']
+                            other_file_path = os.path.join(files_info['folder_path'], other_filename)
                             
-                            # Process other file with ingest_normal for resumes_normal table
-                            other_file_path = os.path.join(files_info['folder_path'], other_filename)
-                            other_file_path = os.path.join(files_info['folder_path'], other_filename)
+                            # NEW: Upload resume PDF to server BEFORE processing
+                            st.info("📤 Uploading resume PDF to server...")
+                            resume_pdf_url = pdf_server.upload_pdf(other_file_path, candidate_key.strip(), 'resume')
+                            
+                            if resume_pdf_url:
+                                st.success(f"✅ Resume PDF uploaded: {resume_pdf_url}")
+                            else:
+                                st.warning("⚠️ Resume PDF upload failed")
+                            
                             try:
                                 # Create temporary folder with just this file
                                 with tempfile.TemporaryDirectory() as temp_folder:
-                                    # Copy the file to temp folder (or create symlink)
+                                    # Copy the file to temp folder
                                     import shutil
                                     temp_file_path = os.path.join(temp_folder, other_filename)
                                     shutil.copy2(other_file_path, temp_file_path)
+                                    
+                                    # Process with ingest_normal (which should now include PDF upload)
                                     ingest_resume_normal(temp_folder, candidate_key.strip())
+                                    
+                                    # IMPORTANT: Update the resumes_normal record with PDF URL
+                                    # since ingest_normal might not have the PDF URL
+                                    if resume_pdf_url:
+                                        cur.execute("""
+                                            UPDATE public.resumes_normal 
+                                            SET pdf_url = %s 
+                                            WHERE candidate_key = %s AND filename = %s
+                                        """, (resume_pdf_url, candidate_key.strip(), other_filename))
+                                        conn.commit()
+                                        st.info(f"✅ Resume PDF URL updated in database")
                                     
                                 st.success(f"✅ Skills extracted and upserted for: {other_filename}")
                                 success_count += 1
@@ -546,6 +832,29 @@ elif mode == "✏️ Manual Add":
                         
                         st.success(f"🎉 Successfully processed {success_count} operations!")
                         
+                        # Show PDF links if both uploads were successful
+                        if miko_pdf_url or resume_pdf_url:
+                            st.markdown("---")
+                            st.markdown("#### 📄 Uploaded PDF Links")
+                            
+                            if miko_pdf_url:
+                                st.markdown(f"""
+                                <a href="{miko_pdf_url}" target="_blank">
+                                    <button style="background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px;">
+                                        📋 View MikoMiko PDF
+                                    </button>
+                                </a>
+                                """, unsafe_allow_html=True)
+                            
+                            if resume_pdf_url:
+                                st.markdown(f"""
+                                <a href="{resume_pdf_url}" target="_blank">
+                                    <button style="background-color: #2196F3; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px;">
+                                        📄 View Resume PDF
+                                    </button>
+                                </a>
+                                """, unsafe_allow_html=True)
+                        
                         # Clear session state
                         if hasattr(st.session_state, 'folder_files'):
                             del st.session_state.folder_files
@@ -554,6 +863,8 @@ elif mode == "✏️ Manual Add":
                             
                     except Exception as e:
                         st.error(f"❌ Error during ingestion: {e}")
+                        import traceback
+                        st.error(f"Detailed error: {traceback.format_exc()}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Deletion Mode

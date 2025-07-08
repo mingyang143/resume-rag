@@ -15,6 +15,7 @@ import pickle
 from pathlib import Path
 import re
 import pytesseract
+from ..frontend.pdf_server import pdf_server
 
 from pdf2image import convert_from_path    # pip install pdf2image
 from dotenv import load_dotenv
@@ -876,7 +877,19 @@ def ingest_resume_normal(resumes_folder: str, candidate_key: str):
         print(f"Full text length: {len(full_text)} characters\n")
         print("----------------------------------------------------")
 
-
+         # NEW: Upload PDF to server before database insertion
+        print("----------------------------------------------------")
+        print(f"  • Uploading PDF to web server: {fname}")
+        print("----------------------------------------------------")
+        
+        # Upload PDF and get URL
+        pdf_url = pdf_server.upload_pdf(pdf, candidate_key, 'resume')
+        
+        if pdf_url:
+            print(f"✅ PDF uploaded to server: {pdf_url}")
+        else:
+            print(f"❌ Failed to upload PDF: {fname}")
+        
 
         # print("----------------------------------------------------")
         # print("Categorizing skills into technical domains...")
@@ -922,7 +935,8 @@ def ingest_resume_normal(resumes_folder: str, candidate_key: str):
             candidate_key        = candidate_key,
             skills_categories    = top_names,
             full_resume_txt      = full_text,
-            skills_summary_txt   = skills_summary_txt
+            skills_summary_txt   = skills_summary_txt,
+            pdf_url              = pdf_url  # Add this parameter
         )
         # ─────────────────────────────────────────────────────────────────
 
