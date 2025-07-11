@@ -77,35 +77,90 @@ def initialize_database_once():
         print("🔄 Database already initialized (skipping)")
         return True
 
+# def check_active_sessions():
+#     """Check for any active ingestion sessions in the database"""
+#     try:
+#         env = load_env_vars()
+#         conn = connect_postgres(env)
+#         cur = conn.cursor()
+        
+#         # Check for active sessions
+#         cur.execute("""
+#             SELECT session_id, status, total_files, processed_files, current_file, started_at, updated_at
+#             FROM ingestion_progress 
+#             WHERE status = 'RUNNING' AND processed_files < total_files
+#             ORDER BY started_at DESC
+#             LIMIT 1
+#         """)
+        
+#         active_session = cur.fetchone()
+#         cur.close()
+#         conn.close()
+        
+#         if active_session:
+#             return {
+#                 'session_id': active_session[0],
+#                 'status': active_session[1],
+#                 'total_files': active_session[2],
+#                 'processed_files': active_session[3],
+#                 'current_file': active_session[4],
+#                 'started_at': active_session[5],
+#                 'updated_at': active_session[6]
+#             }
+        
+#         return None
+        
+#     except Exception as e:
+#         print(f"Error checking active sessions: {e}")
+#         return None
+
 def check_active_sessions():
-    """Check for any active ingestion sessions in the database"""
+    """Check for any active or recently completed ingestion sessions in the database"""
     try:
         env = load_env_vars()
         conn = connect_postgres(env)
         cur = conn.cursor()
         
-        # Check for active sessions
+        # First check for RUNNING sessions
         cur.execute("""
-            SELECT session_id, status, total_files, processed_files, current_file, started_at, updated_at
+            SELECT session_id, status, total_files, processed_files, current_file, 
+                   started_at, updated_at, metadata
             FROM ingestion_progress 
-            WHERE status = 'RUNNING' AND processed_files < total_files
+            WHERE status = 'RUNNING'
             ORDER BY started_at DESC
             LIMIT 1
         """)
         
-        active_session = cur.fetchone()
+        session = cur.fetchone()
+        
+        # If no RUNNING session, check for recent COMPLETED sessions (in the last hour)
+        if not session:
+            cur.execute("""
+                SELECT session_id, status, total_files, processed_files, current_file, 
+                       started_at, updated_at, metadata
+                FROM ingestion_progress 
+                WHERE status = 'COMPLETED' AND 
+                      updated_at > NOW() - INTERVAL '1 hour'
+                ORDER BY updated_at DESC
+                LIMIT 1
+            """)
+            session = cur.fetchone()
+        
         cur.close()
         conn.close()
         
-        if active_session:
+        if session:
+            # Convert row to dictionary
+            metadata = session[7] if session[7] else {}
             return {
-                'session_id': active_session[0],
-                'status': active_session[1],
-                'total_files': active_session[2],
-                'processed_files': active_session[3],
-                'current_file': active_session[4],
-                'started_at': active_session[5],
-                'updated_at': active_session[6]
+                'session_id': session[0],
+                'status': session[1],
+                'total_files': session[2],
+                'processed_files': session[3],
+                'current_file': session[4],
+                'started_at': session[5],
+                'updated_at': session[6],
+                'metadata': metadata
             }
         
         return None
@@ -114,37 +169,173 @@ def check_active_sessions():
         print(f"Error checking active sessions: {e}")
         return None
     
+# def render_persistent_progress(session_info):
+#     """Render progress bar based on database state"""
+    
+#     progress = session_info['processed_files'] / session_info['total_files'] if session_info['total_files'] > 0 else 0
+    
+#     st.warning("🔄 **Ingestion in Progress - Safe to refresh or navigate!**")
+    
+#     col1, col2, col3 = st.columns([2, 1, 1])
+    
+#     with col1:
+#         st.progress(progress, text=f"Processing: {session_info['processed_files']}/{session_info['total_files']} candidates")
+#         if session_info['current_file']:
+#             st.caption(f"📄 Current: {session_info['current_file']}")
+    
+#     with col2:
+#         st.metric("Session", session_info['session_id'][:8] + "...")
+#         elapsed_time = datetime.now() - session_info['started_at']
+#         st.caption(f"⏱️ Running for {elapsed_time.seconds // 60}m {elapsed_time.seconds % 60}s")
+    
+#     with col3:
+#         st.metric("Progress", f"{session_info['processed_files']}/{session_info['total_files']}")
+#         progress_percent = f"{progress * 100:.1f}%"
+#         st.caption(f"📊 {progress_percent} complete")
+    
+#     # Auto-refresh every 3 seconds
+#     refresh_container = st.empty()
+#     for i in range(3, 0, -1):
+#         refresh_container.text(f"Auto-refreshing in {i} seconds...")
+#         time.sleep(1)
+#     refresh_container.empty()
+#     st.rerun()
+
 def render_persistent_progress(session_info):
     """Render progress bar based on database state"""
     
     progress = session_info['processed_files'] / session_info['total_files'] if session_info['total_files'] > 0 else 0
     
-    st.warning("🔄 **Ingestion in Progress - Safe to refresh or navigate!**")
+    # Different display for completed vs. in-progress sessions
+    if session_info['status'] == 'COMPLETED':
+        st.success("✅ **Ingestion Complete!**")
+        
+        # Display summary logs if available
+        if session_info.get('metadata') and 'summary_logs' in session_info['metadata']:
+            st.markdown("### 📋 Summary Logs")
+            logs = session_info['metadata']['summary_logs']
+            
+            with st.expander("View All Logs", expanded=True):
+                for log in logs:
+                    if log.startswith("✓"):
+                        st.markdown(f"✅ {log[1:]}")
+                    elif log.startswith("⚠️"):
+                        st.warning(log)
+                    elif log.startswith("❌"):
+                        st.error(log)
+                    else:
+                        st.text(log)
+        
+        # Show log file download option
+        if session_info.get('metadata') and 'log_file_path' in session_info['metadata']:
+            log_file_path = session_info['metadata']['log_file_path']
+            
+            st.markdown("### 📄 Detailed Log File")
+            st.info(f"📁 **Log file location:** `{log_file_path}`")
+            
+            # Try to read and offer download
+            try:
+                if os.path.exists(log_file_path):
+                    with open(log_file_path, 'r', encoding='utf-8') as f:
+                        log_content = f.read()
+                    
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        st.download_button(
+                            "⬇️ Download Detailed Log",
+                            log_content,
+                            file_name=f"ingestion_log_{session_info['session_id'][:8]}.txt",
+                            mime="text/plain"
+                        )
+                    
+                    with col2:
+                        if st.button("👁️ View Log in Browser"):
+                            st.text_area("Log Content", log_content, height=400)
+                else:
+                    st.warning("⚠️ Log file not found. It may have been moved or deleted.")
+            except Exception as e:
+                st.error(f"❌ Could not read log file: {e}")
+        
+        
+        # SINGLE BUTTON for completed sessions
+        if st.button("✅ Clear Completed Session", type="primary"):
+            try:
+                env = load_env_vars()
+                conn = connect_postgres(env)
+                cur = conn.cursor()
+                
+                cur.execute("""
+                    UPDATE ingestion_progress 
+                    SET status = 'ARCHIVED' 
+                    WHERE session_id = %s
+                """, (session_info['session_id'],))
+                
+                conn.commit()
+                cur.close()
+                conn.close()
+                
+                st.success("✅ Session cleared! Ready for new ingestion.")
+                time.sleep(1)
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"❌ Error clearing session: {e}")
+        
+            
+        
     
-    col1, col2, col3 = st.columns([2, 1, 1])
+    else:
+        # Original in-progress display
+        st.warning("🔄 **Ingestion in Progress - Safe to refresh or navigate!**")
+        
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            st.progress(progress, text=f"Processing: {session_info['processed_files']}/{session_info['total_files']} candidates")
+            if session_info['current_file']:
+                st.caption(f"📄 Current: {session_info['current_file']}")
+        
+        with col2:
+            st.metric("Session", session_info['session_id'][:8] + "...")
+            elapsed_time = datetime.now() - session_info['started_at']
+            st.caption(f"⏱️ Running for {elapsed_time.seconds // 60}m {elapsed_time.seconds % 60}s")
+        
+        with col3:
+            st.metric("Progress", f"{session_info['processed_files']}/{session_info['total_files']}")
+            progress_percent = f"{progress * 100:.1f}%"
+            st.caption(f"📊 {progress_percent} complete")
+        
+        # ADD THIS STOP BUTTON:
+        if st.button("🛑 Stop Current Ingestion", type="secondary"):
+            try:
+                env = load_env_vars()
+                conn = connect_postgres(env)
+                cur = conn.cursor()
+                
+                cur.execute("""
+                    UPDATE ingestion_progress 
+                    SET status = 'ARCHIVED' 
+                    WHERE session_id = %s
+                """, (session_info['session_id'],))
+                
+                conn.commit()
+                cur.close()
+                conn.close()
+                
+                st.success("✅ Ingestion stopped! Ready for new ingestion.")
+                time.sleep(1)
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"❌ Error stopping ingestion: {e}")
     
-    with col1:
-        st.progress(progress, text=f"Processing: {session_info['processed_files']}/{session_info['total_files']} candidates")
-        if session_info['current_file']:
-            st.caption(f"📄 Current: {session_info['current_file']}")
-    
-    with col2:
-        st.metric("Session", session_info['session_id'][:8] + "...")
-        elapsed_time = datetime.now() - session_info['started_at']
-        st.caption(f"⏱️ Running for {elapsed_time.seconds // 60}m {elapsed_time.seconds % 60}s")
-    
-    with col3:
-        st.metric("Progress", f"{session_info['processed_files']}/{session_info['total_files']}")
-        progress_percent = f"{progress * 100:.1f}%"
-        st.caption(f"📊 {progress_percent} complete")
-    
-    # Auto-refresh every 3 seconds
-    refresh_container = st.empty()
-    for i in range(3, 0, -1):
-        refresh_container.text(f"Auto-refreshing in {i} seconds...")
-        time.sleep(1)
-    refresh_container.empty()
-    st.rerun()
+        # Auto-refresh every 3 seconds
+        refresh_container = st.empty()
+        for i in range(3, 0, -1):
+            refresh_container.text(f"Auto-refreshing in {i} seconds...")
+            time.sleep(1)
+        refresh_container.empty()
+        st.rerun()
 
 # Call this instead of direct initialization
 initialize_database_once()
@@ -348,31 +539,6 @@ elif mode == "📥 Ingestion":
     if active_session:
         # Show persistent progress instead of the form
         render_persistent_progress(active_session)
-        
-        # Add button to force check completion
-        if st.button("🔄 Check if Completed"):
-            st.rerun()
-        
-        # Show option to abandon session
-        with st.expander("⚠️ Advanced Options"):
-            if st.button("🛑 Abandon Current Session", type="secondary"):
-                try:
-                    env = load_env_vars()
-                    conn = connect_postgres(env)
-                    cur = conn.cursor()
-                    cur.execute("""
-                        UPDATE ingestion_progress 
-                        SET status = 'ABANDONED' 
-                        WHERE session_id = %s
-                    """, (active_session['session_id'],))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                    st.success("✅ Session abandoned. You can now start a new ingestion.")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Failed to abandon session: {e}")
         
         # Stop here - don't show the normal ingestion form
         st.stop()
