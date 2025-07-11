@@ -314,7 +314,8 @@ def render_persistent_progress(session_info):
                 
                 cur.execute("""
                     UPDATE ingestion_progress 
-                    SET status = 'ARCHIVED' 
+                    SET status = 'ARCHIVED',
+                        current_file = 'Stopping gracefully...'
                     WHERE session_id = %s
                 """, (session_info['session_id'],))
                 
@@ -322,8 +323,13 @@ def render_persistent_progress(session_info):
                 cur.close()
                 conn.close()
                 
-                st.success("✅ Ingestion stopped! Ready for new ingestion.")
-                time.sleep(1)
+                # Show user feedback about graceful stopping
+                st.success("🛑 **Stop signal sent!**")
+                st.info("⏱️ **Ingestion will stop gracefully after current candidate finishes...**")
+                st.info("🔄 **This may take 30-60 seconds depending on current file size**")
+                st.warning("⚠️ **Completed candidates will be preserved in the database**")
+                
+                time.sleep(5)  # Give user time to read the message
                 st.rerun()
                 
             except Exception as e:

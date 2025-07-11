@@ -399,8 +399,13 @@ def render_overview_chat_interface():
         
         print(f"💬 Found {len(all_candidate_keys)} candidates with {len(all_filenames)} total files")
         
-        # Show summary
-        st.info(f"💬 Ready to chat about **{len(all_candidate_keys)} candidates** with **{len(all_filenames)} total files**")
+        
+        # Show summary with candidate keys
+        st.info(
+            f"💬 Ready to chat about **{len(all_candidate_keys)} candidates** "
+            f"with **{len(all_filenames)} total files**\n\n"
+            f"**Candidate Keys:** {', '.join(sorted(all_candidate_keys))}"
+        )
         
         # Initialize session state - use a unique key for overview chat
         chat_key = "overview_chat_all_candidates"
