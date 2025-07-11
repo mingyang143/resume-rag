@@ -434,7 +434,7 @@ def render_overview_chat_interface():
             email_service = EmailService()
             
             # Process the user input using the same helper function
-            reply = process_user_input(user_input, all_filenames, all_candidate_keys, email_service)
+            reply = process_user_input(user_input, all_candidate_keys, all_candidate_keys, email_service)
             
             print(f"💬 AI reply: {reply[:100]}...")
             
