@@ -4,6 +4,10 @@ import time
 import streamlit as st
 import psycopg2
 from dotenv import load_dotenv
+from datetime import datetime
+import uuid
+from multiprocessing import Process
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Ensure project root is on sys.path so that "resume_analyzer" can be imported
@@ -31,6 +35,7 @@ from resume_analyzer.frontend.helpers import render_deletion_tab, render_overvie
 from resume_analyzer.backend.email_service import EmailService
 from resume_analyzer.frontend.email_ui_helpers import process_user_input
 from resume_analyzer.frontend.pdf_server import debug_pdf_server, test_pdf_server
+from resume_analyzer.ingestion.ingest_worker import run_ingestion_worker
 from pdf2image import convert_from_path
 import tempfile
 import json
@@ -71,6 +76,75 @@ def initialize_database_once():
     else:
         print("🔄 Database already initialized (skipping)")
         return True
+
+def check_active_sessions():
+    """Check for any active ingestion sessions in the database"""
+    try:
+        env = load_env_vars()
+        conn = connect_postgres(env)
+        cur = conn.cursor()
+        
+        # Check for active sessions
+        cur.execute("""
+            SELECT session_id, status, total_files, processed_files, current_file, started_at, updated_at
+            FROM ingestion_progress 
+            WHERE status = 'RUNNING' AND processed_files < total_files
+            ORDER BY started_at DESC
+            LIMIT 1
+        """)
+        
+        active_session = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if active_session:
+            return {
+                'session_id': active_session[0],
+                'status': active_session[1],
+                'total_files': active_session[2],
+                'processed_files': active_session[3],
+                'current_file': active_session[4],
+                'started_at': active_session[5],
+                'updated_at': active_session[6]
+            }
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error checking active sessions: {e}")
+        return None
+    
+def render_persistent_progress(session_info):
+    """Render progress bar based on database state"""
+    
+    progress = session_info['processed_files'] / session_info['total_files'] if session_info['total_files'] > 0 else 0
+    
+    st.warning("🔄 **Ingestion in Progress - Safe to refresh or navigate!**")
+    
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        st.progress(progress, text=f"Processing: {session_info['processed_files']}/{session_info['total_files']} candidates")
+        if session_info['current_file']:
+            st.caption(f"📄 Current: {session_info['current_file']}")
+    
+    with col2:
+        st.metric("Session", session_info['session_id'][:8] + "...")
+        elapsed_time = datetime.now() - session_info['started_at']
+        st.caption(f"⏱️ Running for {elapsed_time.seconds // 60}m {elapsed_time.seconds % 60}s")
+    
+    with col3:
+        st.metric("Progress", f"{session_info['processed_files']}/{session_info['total_files']}")
+        progress_percent = f"{progress * 100:.1f}%"
+        st.caption(f"📊 {progress_percent} complete")
+    
+    # Auto-refresh every 3 seconds
+    refresh_container = st.empty()
+    for i in range(3, 0, -1):
+        refresh_container.text(f"Auto-refreshing in {i} seconds...")
+        time.sleep(1)
+    refresh_container.empty()
+    st.rerun()
 
 # Call this instead of direct initialization
 initialize_database_once()
@@ -192,8 +266,118 @@ if mode == "📊 Overview":
 # ──────────────────────────────────────────────────────────────────────────────
 # Ingestion Mode
 # ──────────────────────────────────────────────────────────────────────────────
-elif mode == "📥 Ingestion":
+# elif mode == "📥 Ingestion":
 
+#     if not resumes_folder:
+#         status_placeholder.info("Enter a folder path in the sidebar to begin ingestion.")
+#         st.stop()
+
+#     if not os.path.isdir(resumes_folder):
+#         status_placeholder.error("❌ The provided path does not exist or is not a directory.")
+#         st.stop()
+
+#     # Show folder summary
+#     candidates = [
+#         d for d in os.listdir(resumes_folder)
+#         if os.path.isdir(os.path.join(resumes_folder, d))
+#     ]
+
+#     col1, col2 = st.columns([1, 3])
+#     with col1:
+#         st.metric("📂 Folder", os.path.basename(resumes_folder))
+#         st.metric("🗂️ Candidates", len(candidates))
+#     with col2:
+#         st.dataframe(
+#             {
+#                 "Candidate folder": candidates,
+#                 "Num Resumes": [
+#                     len([f for f in os.listdir(os.path.join(resumes_folder, d))
+#                     if f.lower().endswith((".pdf", ".docx"))
+#                 ])
+#                 for d in candidates
+#                 ],
+#             },
+#             height=200,
+#         )
+
+#     st.markdown("---")
+
+#     if run_button:
+#         # Clear placeholders
+#         progress_placeholder.empty()
+#         status_placeholder.empty()
+#         log_placeholder.empty()
+#         results_placeholder.empty()
+
+#         total_folders = len(candidates)
+#         if total_folders == 0:
+#             status_placeholder.warning("⚠️ No folders found to ingest.")
+#         else:
+#             # Initialize progress bar
+#             progress_bar = progress_placeholder.progress(0.0, text="Starting…")
+#             status_placeholder.info(f"Starting ingestion of {total_folders} folder(s)…")
+
+#             logs: list[str] = []
+
+#             # Define callback for each processed file
+#             def progress_callback(idx: int, total: int, filename: str):
+#                 fraction = idx / total
+#                 progress_bar.progress(fraction, text=f"Processing {filename} ({idx}/{total})")
+#                 logs.append(f"[{idx}/{total}] Processed: {filename}")
+#                 log_placeholder.text("\n".join(logs))
+
+#             # Run ingestion
+#             summary = ingest_all_candidates(resumes_folder, progress_callback)
+
+#             # Finalize progress and status
+#             progress_bar.progress(1.0, text="Completed")
+#             status_placeholder.success("✅ Ingestion complete!")
+
+#             # Append summary logs
+#             for line in summary:
+#                 logs.append(line)
+#             log_placeholder.text("\n".join(logs))
+
+#     else:
+#         status_placeholder.info("Click 'Run Ingestion' in the sidebar to begin.")
+
+elif mode == "📥 Ingestion":
+    # FIRST: Check for active sessions before showing the form
+    active_session = check_active_sessions()
+    
+    if active_session:
+        # Show persistent progress instead of the form
+        render_persistent_progress(active_session)
+        
+        # Add button to force check completion
+        if st.button("🔄 Check if Completed"):
+            st.rerun()
+        
+        # Show option to abandon session
+        with st.expander("⚠️ Advanced Options"):
+            if st.button("🛑 Abandon Current Session", type="secondary"):
+                try:
+                    env = load_env_vars()
+                    conn = connect_postgres(env)
+                    cur = conn.cursor()
+                    cur.execute("""
+                        UPDATE ingestion_progress 
+                        SET status = 'ABANDONED' 
+                        WHERE session_id = %s
+                    """, (active_session['session_id'],))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    st.success("✅ Session abandoned. You can now start a new ingestion.")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to abandon session: {e}")
+        
+        # Stop here - don't show the normal ingestion form
+        st.stop()
+    
+    # NORMAL INGESTION FORM (only shown when no active session)
     if not resumes_folder:
         status_placeholder.info("Enter a folder path in the sidebar to begin ingestion.")
         st.stop()
@@ -239,34 +423,67 @@ elif mode == "📥 Ingestion":
         if total_folders == 0:
             status_placeholder.warning("⚠️ No folders found to ingest.")
         else:
-            # Initialize progress bar
-            progress_bar = progress_placeholder.progress(0.0, text="Starting…")
-            status_placeholder.info(f"Starting ingestion of {total_folders} folder(s)…")
+             # Create new session ID
+            session_id = str(uuid.uuid4())
+            
+            # Start worker process
+            worker = Process(
+                target=run_ingestion_worker,
+                args=(resumes_folder, session_id, 4)  # Add more args if needed
+            )
+            worker.daemon = True  # Process will exit when main program exits
+            worker.start()
+            
+            # Show initial progress
+            status_placeholder.info(f"✅ Ingestion started with session ID: {session_id[:8]}...")
+            status_placeholder.info("🔄 You can safely navigate away - progress will continue in background")
+            
+            # Force refresh to show the progress tracking UI
+            time.sleep(1)
+            st.rerun()
+            
+            
+            
+            # # Initialize progress bar
+            # progress_bar = progress_placeholder.progress(0.0, text="Starting…")
+            # status_placeholder.info(f"Starting ingestion of {total_folders} folder(s)…")
 
-            logs: list[str] = []
+            # logs: list[str] = []
 
-            # Define callback for each processed file
-            def progress_callback(idx: int, total: int, filename: str):
-                fraction = idx / total
-                progress_bar.progress(fraction, text=f"Processing {filename} ({idx}/{total})")
-                logs.append(f"[{idx}/{total}] Processed: {filename}")
-                log_placeholder.text("\n".join(logs))
+            # # Define callback for UI updates
+            # def progress_callback(idx: int, total: int, filename: str):
+            #     fraction = idx / total
+            #     progress_bar.progress(fraction, text=f"Processing {filename} ({idx}/{total})")
+            #     logs.append(f"[{idx}/{total}] Processed: {filename}")
+            #     log_placeholder.text("\n".join(logs[-10:]))  # Show last 10 logs
 
-            # Run ingestion
-            summary = ingest_all_candidates(resumes_folder, progress_callback)
+            # # Import the enhanced function
+            # from resume_analyzer.ingestion.ingest_all import ingest_all_candidates_with_progress
 
-            # Finalize progress and status
-            progress_bar.progress(1.0, text="Completed")
-            status_placeholder.success("✅ Ingestion complete!")
+            # # Run ingestion with progress tracking
+            # try:
+            #     summary, session_id = ingest_all_candidates_with_progress(
+            #         resumes_folder, 
+            #         progress_callback,
+            #         max_workers=4
+            #     )
 
-            # Append summary logs
-            for line in summary:
-                logs.append(line)
-            log_placeholder.text("\n".join(logs))
+            #     # Finalize progress and status
+            #     progress_bar.progress(1.0, text="Completed")
+            #     status_placeholder.success(f"✅ Ingestion complete! Session: {session_id[:8]}...")
+
+            #     # Append summary logs
+            #     for line in summary:
+            #         logs.append(line)
+            #     log_placeholder.text("\n".join(logs))
+                
+            # except Exception as e:
+            #     status_placeholder.error(f"❌ Ingestion failed: {e}")
+            #     progress_bar.progress(0.0, text="Failed")
 
     else:
         status_placeholder.info("Click 'Run Ingestion' in the sidebar to begin.")
-
+        
 # ──────────────────────────────────────────────────────────────────────────────
 # Skill Categories Mode
 # ──────────────────────────────────────────────────────────────────────────────
