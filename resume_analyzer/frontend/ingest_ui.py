@@ -2,7 +2,6 @@ import os
 import sys
 import time
 import streamlit as st
-import psycopg2
 from dotenv import load_dotenv
 from datetime import datetime
 import uuid
