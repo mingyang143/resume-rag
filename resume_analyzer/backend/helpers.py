@@ -617,6 +617,54 @@ def judge_candidates_by_summary(
     
     return reranked_results
 
+# def _handle_skill_matching_query(user_query: str, candidate_keys: List[str], context_limit: int) -> Dict[str, any]:
+#     """
+#     Handle queries about finding candidates with specific skills
+#     """
+#     # Extract skills from the query
+#     skills = extract_skills_from_query(qwen, user_query)
+    
+#     if not skills:
+#         return {
+#             "answer": "I couldn't identify any specific technical skills in your query. Could you be more specific about the technologies or skills you're looking for?",
+#             "query_type": "skill_matching",
+#             "candidates_analyzed": [],
+#             "skills_extracted": [],
+#             "additional_info": {"suggestion": "Try mentioning specific technologies like 'Python', 'React', 'AWS', etc."}
+#         }
+    
+#     # Analyze candidates
+#     results = judge_candidates_by_summary(candidate_keys, skills)
+    
+#     # Sort by score and take top matches
+#     sorted_results = sorted(
+#         results.items(), 
+#         key=lambda x: x[1].get("rank_position", 999)  # Sort by rank (1 = best)
+#     )[:context_limit]
+
+#     answer_parts = [f"Based on your query about {', '.join(skills)}, here are the candidates ranked by suitability:\n"]
+        
+#     for filename, analysis in sorted_results:
+#         rank = analysis.get("rank_position", "?")
+#         reasoning = analysis.get("ranking_reasoning", analysis.get("reasoning", "No reasoning provided"))
+        
+#         answer_parts.append(f"**#{rank}. {filename}**")
+#         answer_parts.append(f"   {reasoning}\n")
+    
+#     answer = "\n".join(answer_parts)
+
+#     return {
+#         "answer": answer,
+#         "query_type": "skill_matching",
+#         "candidates_analyzed": [item[0] for item in sorted_results],
+#         "skills_extracted": skills,
+#         "additional_info": {
+#             "total_candidates_checked": len(results),
+#             "top_matches": len(sorted_results),
+#             "ranking_method": "comparative_suitability"
+#         }
+#     }
+
 def _handle_skill_matching_query(user_query: str, candidate_keys: List[str], context_limit: int) -> Dict[str, any]:
     """
     Handle queries about finding candidates with specific skills
@@ -642,21 +690,46 @@ def _handle_skill_matching_query(user_query: str, candidate_keys: List[str], con
         key=lambda x: x[1].get("rank_position", 999)  # Sort by rank (1 = best)
     )[:context_limit]
 
+    # NEW: Create filename to candidate_key mapping
+    filename_to_candidate = {}
+    env = load_env_vars()
+    conn = connect_postgres(env)
+    cur = conn.cursor()
+    
+    # Get candidate names for the analyzed files
+    analyzed_filenames = [item[0] for item in sorted_results]
+    if analyzed_filenames:
+        cur.execute("""
+            SELECT filename, candidate_key 
+            FROM public.resumes_normal 
+            WHERE filename = ANY(%s)
+        """, (analyzed_filenames,))
+        filename_to_candidate = dict(cur.fetchall())
+    
+    cur.close()
+    conn.close()
+
     answer_parts = [f"Based on your query about {', '.join(skills)}, here are the candidates ranked by suitability:\n"]
         
     for filename, analysis in sorted_results:
         rank = analysis.get("rank_position", "?")
         reasoning = analysis.get("ranking_reasoning", analysis.get("reasoning", "No reasoning provided"))
         
-        answer_parts.append(f"**#{rank}. {filename}**")
+        # Use candidate name instead of filename
+        candidate_name = filename_to_candidate.get(filename, filename)
+        
+        answer_parts.append(f"**#{rank}. {candidate_name}**")
         answer_parts.append(f"   {reasoning}\n")
     
     answer = "\n".join(answer_parts)
 
+    # Return candidate names instead of filenames
+    analyzed_candidates = [filename_to_candidate.get(filename, filename) for filename in analyzed_filenames]
+
     return {
         "answer": answer,
         "query_type": "skill_matching",
-        "candidates_analyzed": [item[0] for item in sorted_results],
+        "candidates_analyzed": analyzed_candidates,  # Now contains candidate names
         "skills_extracted": skills,
         "additional_info": {
             "total_candidates_checked": len(results),
@@ -873,3 +946,298 @@ if __name__ == "__main__":
     # print(f"📁 Additional Info: {detail_result['additional_info']}")
     # print("----------------------------------------------------")
     
+
+def detect_email_intent(user_input: str, candidate_keys: List[str]) -> Dict[str, any]:
+    """
+    Use LLM to detect if user wants to send an email and extract details including specific fields.
+    """
+    candidates_list = ", ".join(candidate_keys)
+    
+    EMAIL_INTENT_PROMPT = f"""
+        Analyze this user query to determine if they want to send an email to a candidate and extract specific fields.
+
+        USER QUERY: "{user_input}"
+        AVAILABLE CANDIDATES: {candidates_list}
+
+        Return a JSON object with this structure:
+        {{
+        "is_email_request": true/false,
+        "template_type": "template_name_or_null",
+        "candidate_key": "exact_candidate_key_or_null",
+        "confidence": 0.95,
+        "intent": "brief description",
+        "extracted_fields": {{
+            "position": "extracted_position_or_null",
+            "date": "extracted_date_or_null", 
+            "time": "extracted_time_or_null",
+            "format": "extracted_format_or_null",
+            "duration": "extracted_duration_or_null",
+            "start_date": "extracted_start_date_or_null",
+            "end_date": "extracted_end_date_or_null",
+            "salary": "extracted_salary_or_null",
+            "employment_type": "extracted_employment_type_or_null"
+        }}
+        }}
+
+        EMAIL TYPES TO DETECT:
+        
+        1. "offer_template" - Sending job/internship offers
+        Examples: "send offer email to John", "email offer to Mary", "offer John the position"
+        REQUIRED FIELDS TO EXTRACT:
+        - position: job/internship position (extract if mentioned)
+        - start_date: when they should start (COMPULSORY - extract from phrases like "start on Monday", "begin January 15", "starting next week")
+        - end_date: when they should finish (COMPULSORY - extract from phrases like "until March", "ending in June", OR calculate from start_date + duration)
+        - salary: compensation amount (COMPULSORY - extract from phrases like "$1500/month", "salary 2000", "1400 dollars")
+        - duration: work period (COMPULSORY - extract from phrases like "3 months", "June to August", "6-month internship")
+        - employment_type: work type (extract from phrases like "part-time", "full-time", "PT", "FT", "part time", "full time")
+
+        2. "interview_invitation" - Sending interview invitations  
+        Examples: "invite Sarah for interview", "send interview email to Mike", "schedule interview with Lisa"
+        REQUIRED FIELDS TO EXTRACT:
+        - position: job/internship position (extract if mentioned)
+        - date: interview date (COMPULSORY - extract from phrases like "tomorrow", "January 15", "next Monday", "15th")
+        - time: interview time (COMPULSORY - extract from phrases like "2pm", "14:00", "2 o'clock", "afternoon")
+        - format: interview format (OPTIONAL - extract from phrases like "online", "zoom", "in-person", "virtual", "office". Default: "in-person")
+        - duration: interview length (OPTIONAL - extract from phrases like "45 minutes", "1 hour", "30 mins". Default: "1 hour")
+
+        3. "rejection_email" - Sending rejection emails
+        Examples: "send rejection to Alice", "reject Bob via email", "email rejection to Tom"
+        OPTIONAL FIELDS TO EXTRACT:
+        - position: job/internship position (extract if mentioned, otherwise will use database default)
+
+        FIELD EXTRACTION RULES:
+        - Extract fields only when explicitly mentioned in the user query
+        - Set to null if not mentioned
+        - Be flexible with date/time formats (relative dates like "tomorrow", "next week" are valid)
+        - **For employment_type**: Extract "part-time", "full-time", "PT", "FT", "part time", "full time" (case insensitive)
+        - **For duration in offers**: 
+          * Extract numeric durations like "3 months", "6-month internship", "June-August"
+          * For program keywords: "ATAP" = 6 months, "SIP" = 3 months (May-August)
+          * For non-numeric terms like "summer internship", extract as duration but system will use defaults
+          * If both numeric and non-numeric are present like "6-month summer internship", extract the numeric part: "6 months"
+        - **IMPORTANT DURATION LOGIC**:
+          * If both start_date and end_date are mentioned explicitly → extract both, set duration to null
+          * If start_date and duration are mentioned → extract both, set end_date to null
+          * If only duration is mentioned → extract duration, set start_date and end_date to null
+        - For salary: extract any monetary amount mentioned
+        - **DO NOT calculate or infer dates - only extract what is explicitly stated**
+        - **DO NOT assume employment_type unless explicitly mentioned**
+
+        CANDIDATE MATCHING:
+        - Look for candidate names mentioned in the query
+        - Match against available candidates (case-insensitive, partial matching OK)
+        - Return the EXACT candidate key from the available list
+
+        EXAMPLES:
+
+        Query: "Send offer email to John for software engineer position, starting January 15th, salary $2000/month, 6-month internship, part-time"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "offer_template", 
+            "candidate_key": "John",
+            "extracted_fields": {{
+                "position": "software engineer position",
+                "start_date": "January 15th",
+                "end_date": null,
+                "salary": "$2000/month", 
+                "duration": "6-month internship",
+                "employment_type": "part-time",
+                "date": null, "time": null, "format": null
+            }}
+        }}
+
+        Query: "Offer Mary the data analyst role, start February 1st, end August 31st, salary $1800/month, FT"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "offer_template",
+            "candidate_key": "Mary",
+            "extracted_fields": {{
+                "position": "data analyst role",
+                "start_date": "February 1st", 
+                "end_date": "August 31st",
+                "salary": "$1800/month",
+                "duration": null,
+                "employment_type": "FT",
+                "date": null, "time": null, "format": null
+            }}
+        }}
+
+        Query: "Send offer to Tom, starting next Monday, duration 4 months, salary 2500, PT work"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "offer_template",
+            "candidate_key": "Tom",
+            "extracted_fields": {{
+                "position": null,
+                "start_date": "next Monday",
+                "end_date": null,
+                "salary": "2500",
+                "duration": "4 months",
+                "employment_type": "PT",
+                "date": null, "time": null, "format": null
+            }}
+        }}
+        
+        Query: "Send offer to Alice for full-time ATAP program, starting January 15th, salary $2000/month"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "offer_template",
+            "candidate_key": "Alice",
+            "extracted_fields": {{
+                "position": null,
+                "start_date": "January 15th",
+                "end_date": null,
+                "salary": "$2000/month",
+                "duration": "ATAP program",
+                "employment_type": "full-time",
+                "date": null, "time": null, "format": null
+            }}
+        }}
+        
+        Query: "Email offer to Bob for SIP program, salary 1800, Full Time"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "offer_template",
+            "candidate_key": "Bob",
+            "extracted_fields": {{
+                "position": null,
+                "start_date": null,
+                "end_date": null,
+                "salary": "1800",
+                "duration": "SIP program",
+                "employment_type": "Full time",
+                "date": null, "time": null, "format": null
+            }}
+        }}
+
+        Query: "Invite Sarah for interview tomorrow at 2pm via Zoom, 45 minutes"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "interview_invitation",
+            "candidate_key": "Sarah", 
+            "extracted_fields": {{
+                "position": null,
+                "date": "tomorrow",
+                "time": "2pm", 
+                "format": "Zoom",
+                "duration": "45 minutes",
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Schedule interview with Mike for January 20th at 10am, in-person meeting, 1 hour"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "interview_invitation",
+            "candidate_key": "Mike",
+            "extracted_fields": {{
+                "position": null,
+                "date": "January 20th",
+                "time": "10am",
+                "format": "in-person",
+                "duration": "1 hour",
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Send interview email to Lisa next Monday 3pm for software engineer position"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "interview_invitation",
+            "candidate_key": "Lisa",
+            "extracted_fields": {{
+                "position": "software engineer position",
+                "date": "next Monday",
+                "time": "3pm",
+                "format": null,
+                "duration": null,
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Send rejection letter to Alice"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "rejection_email",
+            "candidate_key": "Alice",
+            "extracted_fields": {{
+                "position": null,
+                "date": null, "time": null, "format": null, "duration": null,
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Reject Bob via email for the software engineer internship"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "rejection_email",
+            "candidate_key": "Bob",
+            "extracted_fields": {{
+                "position": "software engineer internship",
+                "date": null, "time": null, "format": null, "duration": null,
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+        
+        Query: "Send rejection email to Carol for data analyst role"
+        Response: {{
+            "is_email_request": true,
+            "template_type": "rejection_email",
+            "candidate_key": "Carol",
+            "extracted_fields": {{
+                "position": "data analyst role",
+                "date": null, "time": null, "format": null, "duration": null,
+                "start_date": null, "end_date": null, "salary": null, "employment_type": null
+            }}
+        }}
+
+        Return ONLY the JSON object.
+        """
+    
+    try:
+        reply = qwen.chat_completion(
+            question=EMAIL_INTENT_PROMPT,
+            system_prompt="You are an expert at understanding email-related requests and extracting specific fields from HR contexts."
+        ).strip()
+        
+        # Clean up response
+        if reply.startswith("```"):
+            reply = "\n".join(
+                line for line in reply.splitlines()
+                if not line.strip().startswith("```")
+            ).strip()
+        
+        email_intent = json.loads(reply)
+        
+        # Validate the response structure
+        required_fields = ["is_email_request", "template_type", "candidate_key", "extracted_fields"]
+        if not all(field in email_intent for field in required_fields):
+            print(f"Invalid email intent response: {email_intent}")
+            return {'is_email_request': False}
+        
+        # Additional validation - ensure candidate exists if specified
+        if email_intent['is_email_request'] and email_intent['candidate_key']:
+            if email_intent['candidate_key'] not in candidate_keys:
+                # Try to find a close match
+                candidate_key_lower = email_intent['candidate_key'].lower()
+                for key in candidate_keys:
+                    if candidate_key_lower in key.lower() or key.lower() in candidate_key_lower:
+                        email_intent['candidate_key'] = key
+                        break
+                else:
+                    # No match found
+                    original_candidate = email_intent['candidate_key']
+                    email_intent['candidate_key'] = None
+                    email_intent['intent'] = f"Candidate '{original_candidate}' not found in current results"
+        
+        print("----------------------------------------------------")
+        print(f"📧 Email intent detected: {email_intent}")
+        print("----------------------------------------------------")
+        
+        return email_intent
+        
+    except (json.JSONDecodeError, ValueError) as e:
+        print("----------------------------------------------------")
+        print(f"Error detecting email intent: {e}")
+        print("----------------------------------------------------")
+        return {'is_email_request': False}
